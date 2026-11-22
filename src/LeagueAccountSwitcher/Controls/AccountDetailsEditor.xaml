@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="LeagueAccountSwitcher.Controls.AccountDetailsEditor"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:LeagueAccountSwitcher.ViewModels"
+    IsTabStop="False">
+
+    <Grid ColumnSpacing="10" RowSpacing="12">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBox
+            Grid.ColumnSpan="3"
+            Header="Nickname (optional)"
+            MaxLength="32"
+            PlaceholderText="Main, Smurf, Duo account"
+            Text="{x:Bind Details.Alias, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+        <TextBox
+            Grid.Row="1"
+            Grid.ColumnSpan="2"
+            Header="Game name"
+            MaxLength="32"
+            PlaceholderText="Filled in by League Client"
+            Text="{x:Bind Details.GameName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+        <TextBox
+            Grid.Row="1"
+            Grid.Column="2"
+            Header="Tag"
+            MaxLength="6"
+            PlaceholderText="EUW"
+            Text="{x:Bind Details.TagLine, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+        <ComboBox
+            Grid.Row="2"
+            Grid.ColumnSpan="2"
+            HorizontalAlignment="Stretch"
+            Header="Region"
+            ItemsSource="{x:Bind vm:AccountDetailsViewModel.Regions}"
+            SelectedItem="{x:Bind Details.Region, Mode=TwoWay}" />
+        <NumberBox
+            Grid.Row="2"
+            Grid.Column="2"
+            Header="Level"
+            Maximum="99999"
+            Minimum="0"
+            Value="{x:Bind Details.Level, Mode=TwoWay}" />
+
+        <ComboBox
+            Grid.Row="3"
+            HorizontalAlignment="Stretch"
+            Header="Solo/Duo rank"
+            ItemsSource="{x:Bind vm:AccountDetailsViewModel.Tiers}"
+            SelectedItem="{x:Bind Details.Tier, Mode=TwoWay}" />
+        <ComboBox
+            Grid.Row="3"
+            Grid.Column="1"
+            HorizontalAlignment="Stretch"
+            Header="Division"
+            IsEnabled="{x:Bind Details.HasDivision, Mode=OneWay}"
+            ItemsSource="{x:Bind vm:AccountDetailsViewModel.Divisions}"
+            SelectedItem="{x:Bind Details.Division, Mode=TwoWay}" />
+        <NumberBox
+            Grid.Row="3"
+            Grid.Column="2"
+            Header="LP"
+            IsEnabled="{x:Bind Details.IsRanked, Mode=OneWay}"
+            Maximum="9999"
+            Minimum="0"
+            Value="{x:Bind Details.LeaguePoints, Mode=TwoWay}" />
+
+        <NumberBox
+            Grid.Row="4"
+            Header="Wins"
+            Maximum="99999"
+            Minimum="0"
+            Value="{x:Bind Details.Wins, Mode=TwoWay}" />
+        <NumberBox
+            Grid.Row="4"
+            Grid.Column="1"
+            Header="Losses"
+            Maximum="99999"
+            Minimum="0"
+            Value="{x:Bind Details.Losses, Mode=TwoWay}" />
+    </Grid>
+</UserControl>
