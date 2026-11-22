@@ -1,12 +1,13 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Markup;
-using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace LeagueAccountSwitcher.Controls;
 
 public sealed partial class RankEmblemControl : UserControl
 {
+    private static readonly Dictionary<string, BitmapImage> Cache = new(StringComparer.OrdinalIgnoreCase);
+
     public static readonly DependencyProperty TierProperty = DependencyProperty.Register(
         nameof(Tier),
         typeof(string),
@@ -27,28 +28,39 @@ public sealed partial class RankEmblemControl : UserControl
 
     private void Render()
     {
-        var look = TierPalette.Get(Tier);
-        var light = new SolidColorBrush(TierPalette.ToColor(look.Light));
-        var main = new SolidColorBrush(TierPalette.ToColor(look.Main));
-        var deep = new SolidColorBrush(TierPalette.ToColor(look.Deep));
+        var fileName = NormalizeFileName(Tier);
+        if (!Cache.TryGetValue(fileName, out var image))
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "Assets", "Ranks", $"{fileName}.png");
+            if (!File.Exists(path))
+            {
+                EmblemImage.Source = null;
+                return;
+            }
 
-        (Shield.Fill, Shield.Stroke, ShieldFacet.Fill) = (main, light, deep);
-        (Field.Fill, Field.Stroke) = (deep, main);
-        (SmallWings.Fill, SmallWings.Stroke) = (main, deep);
-        (LargeWings.Fill, LargeWings.Stroke) = (main, deep);
-        (Crown.Fill, Crown.Stroke) = (main, light);
-        Rays.Fill = light;
-        Sigil.Fill = light;
+            image = new BitmapImage(new Uri(path))
+            {
+                DecodePixelWidth = 128,
+            };
+            Cache[fileName] = image;
+        }
 
-        // A Geometry can't be shared between elements, so parse one per emblem.
-        Sigil.Data = (Geometry)XamlBindingHelper.ConvertValue(typeof(Geometry), look.Symbol);
-
-        Show(SmallWings, Tier is "SILVER" or "GOLD");
-        Show(LargeWings, Tier is "PLATINUM" or "EMERALD" or "DIAMOND" or "MASTER" or "GRANDMASTER" or "CHALLENGER");
-        Show(Crown, Tier is "MASTER" or "GRANDMASTER" or "CHALLENGER");
-        Show(Rays, Tier is "CHALLENGER");
+        EmblemImage.Source = image;
     }
 
-    private static void Show(UIElement part, bool visible) =>
-        part.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+    private static string NormalizeFileName(string? tier) =>
+        tier?.Trim().ToUpperInvariant() switch
+        {
+            "IRON" => "iron",
+            "BRONZE" => "bronze",
+            "SILVER" => "silver",
+            "GOLD" => "gold",
+            "PLATINUM" => "platinum",
+            "EMERALD" => "emerald",
+            "DIAMOND" => "diamond",
+            "MASTER" => "master",
+            "GRANDMASTER" => "grandmaster",
+            "CHALLENGER" => "challenger",
+            _ => "unranked",
+        };
 }

@@ -30,10 +30,29 @@
             Severity="{x:Bind ViewModel.Severity, Mode=OneWay}" />
 
         <StackPanel Spacing="12" Visibility="{x:Bind ViewModel.IsCaptureMode, Mode=OneWay}">
-            <TextBlock
-                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                Text="Saves the account that's signed in to Riot Client on this PC. No password is stored."
-                TextWrapping="Wrap" />
+            <Border
+                Padding="12,10"
+                Background="{ThemeResource SystemFillColorCautionBackgroundBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="6">
+                <Grid ColumnSpacing="10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <FontIcon
+                        Margin="0,2,0,0"
+                        VerticalAlignment="Top"
+                        FontSize="16"
+                        Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                        Glyph="&#xE73A;" />
+                    <TextBlock Grid.Column="1" TextWrapping="Wrap">
+                        <Run FontWeight="SemiBold" Text="Required: &quot;Stay signed in&quot; must be checked. " />
+                        <Run Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="No password is stored — Riot only writes a capturable session when Stay signed in is enabled (and League has launched once)." />
+                    </TextBlock>
+                </Grid>
+            </Border>
             <controls:AccountDetailsEditor
                 Details="{x:Bind ViewModel.Details, Mode=OneWay}"
                 Visibility="{x:Bind ViewModel.ShowDetails, Mode=OneWay}" />
@@ -60,13 +79,31 @@
             </Border>
 
             <Border Style="{StaticResource CardStyle}" Padding="16">
-                <StackPanel Spacing="8">
-                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="2. Sign in, then capture" />
-                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap">
-                        <Run Text="In Riot Client, check" />
-                        <Run FontWeight="SemiBold" Text="Stay signed in" />
-                        <Run Text="and sign in (2FA works). Then come back and select Capture New Session." />
-                    </TextBlock>
+                <StackPanel Spacing="10">
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="2. Check &quot;Stay signed in&quot;, sign in, then capture" />
+                    <Border
+                        Padding="12,10"
+                        Background="{ThemeResource SystemFillColorCautionBackgroundBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <FontIcon
+                                Margin="0,2,0,0"
+                                VerticalAlignment="Top"
+                                FontSize="16"
+                                Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                Glyph="&#xE73A;" />
+                            <TextBlock Grid.Column="1" TextWrapping="Wrap">
+                                <Run FontWeight="SemiBold" Text="Don't forget to check &quot;Stay signed in&quot; on Riot's login screen! " />
+                                <Run Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="2FA works normally. Never click Sign Out inside Riot Client later — always switch here instead." />
+                            </TextBlock>
+                        </Grid>
+                    </Border>
                     <TextBox
                         Header="Nickname (optional)"
                         IsEnabled="{x:Bind ViewModel.IsLoginOpen, Mode=OneWay}"

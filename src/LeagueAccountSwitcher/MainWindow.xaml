@@ -136,27 +136,50 @@
                 </ItemsRepeater>
 
                 <Border
-                    MaxWidth="480"
+                    MaxWidth="500"
                     Margin="0,16,0,0"
                     Padding="32,24"
                     VerticalAlignment="Top"
                     Style="{StaticResource CardStyle}"
                     Visibility="{x:Bind ViewModel.ShowEmptyState, Mode=OneWay}">
                     <StackPanel Spacing="12">
-                        <controls:RankEmblemControl Width="72" Height="72" Tier="GOLD" />
+                        <controls:RankEmblemControl Width="84" Height="84" Tier="DIAMOND" />
                         <TextBlock
                             HorizontalAlignment="Center"
                             Style="{StaticResource SubtitleTextBlockStyle}"
                             Text="Your accounts, one click apart" />
                         <TextBlock
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="Switching swaps saved Riot sessions: you stay signed in, 2FA works, and no passwords are stored."
+                            Text="Switching swaps saved Riot sessions: 2FA works and no passwords are stored."
                             TextAlignment="Center"
                             TextWrapping="Wrap" />
+                        <Border
+                            Padding="12,10"
+                            Background="{ThemeResource SystemFillColorCautionBackgroundBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6">
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <FontIcon
+                                    VerticalAlignment="Top"
+                                    Margin="0,2,0,0"
+                                    FontSize="16"
+                                    Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                    Glyph="&#xE73A;" />
+                                <TextBlock Grid.Column="1" TextWrapping="Wrap">
+                                    <Run FontWeight="SemiBold" Text="Always check &quot;Stay signed in&quot; in Riot Client. " />
+                                    <Run Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Without it, Riot does not save a login session on your PC to capture or switch with." />
+                                </TextBlock>
+                            </Grid>
+                        </Border>
                         <Button
                             MinWidth="220"
                             MinHeight="40"
-                            Margin="0,8,0,0"
+                            Margin="0,4,0,0"
                             HorizontalAlignment="Center"
                             Command="{x:Bind ViewModel.AddAccountCommand}"
                             Content="Add Your First Account"
