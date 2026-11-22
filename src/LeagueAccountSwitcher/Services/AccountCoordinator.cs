@@ -34,7 +34,7 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
         {
             account.RankedSolo ??= RankedSoloInfo.Unranked;
             account.HasSavedSession = store.HasSessionSnapshot(account.Id);
-            if (account.LastSyncedAt is not null || account.RankedSolo.IsRanked || account.RankedSolo.TotalGames > 0)
+            if (account.RankedSolo.IsRanked || account.RankedSolo.TotalGames > 0)
                 account.HasRankData = true;
         }
 
@@ -78,7 +78,8 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
         AccountRecord target,
         IProgress<string>? progress,
         bool allowCloseRunningMatch = false,
-        bool allowDiscardUnsavedSession = false)
+        bool allowDiscardUnsavedSession = false,
+        string? confirmedDiscardPuuid = null)
     {
         if (!store.HasSessionSnapshot(target.Id))
             throw new InvalidOperationException("No saved session for this account. Sign in to it, then choose Re-capture Current Session.");
@@ -90,19 +91,22 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
             Settings.RiotClientPathOverride,
             progress,
             allowCloseRunningMatch: allowCloseRunningMatch,
-            allowDiscardUnsavedSession: allowDiscardUnsavedSession), target);
+            allowDiscardUnsavedSession: allowDiscardUnsavedSession,
+            confirmedDiscardPuuid: confirmedDiscardPuuid), target);
     }
 
     public Task PrepareFreshLoginAsync(
         IProgress<string>? progress,
         bool allowCloseRunningMatch = false,
-        bool allowDiscardUnsavedSession = false) =>
+        bool allowDiscardUnsavedSession = false,
+        string? confirmedDiscardPuuid = null) =>
         ReplaceSessionAsync(currentId => riot.PrepareFreshLoginAsync(
             currentId,
             Settings.RiotClientPathOverride,
             progress,
             allowCloseRunningMatch: allowCloseRunningMatch,
-            allowDiscardUnsavedSession: allowDiscardUnsavedSession), next: null);
+            allowDiscardUnsavedSession: allowDiscardUnsavedSession,
+            confirmedDiscardPuuid: confirmedDiscardPuuid), next: null);
 
     private async Task ReplaceSessionAsync(Func<string?, Task> replace, AccountRecord? next)
     {
@@ -110,12 +114,32 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
         try
         {
             var previous = await ResolveSessionOwnerAsync();
+            var previousActiveId = Settings.ActiveAccountId;
+            var preLiveBytes = await TryCaptureBytesBestEffortAsync();
 
             // Cleared first: if this fails halfway, a later backup must not write an unknown session over the previous account.
             Settings.ActiveAccountId = null;
             await SaveSettingsAsync();
 
-            await Task.Run(() => replace(previous?.Id));
+            try
+            {
+                await Task.Run(() => replace(previous?.Id));
+            }
+            catch
+            {
+                // If the operation aborted before altering the live session file, restore the previous active pointer.
+                if (previousActiveId is not null && preLiveBytes is not null)
+                {
+                    var currentLiveBytes = await TryCaptureBytesBestEffortAsync();
+                    if (currentLiveBytes is not null && currentLiveBytes.AsSpan().SequenceEqual(preLiveBytes))
+                    {
+                        Settings.ActiveAccountId = previousActiveId;
+                        await SaveSettingsAsync();
+                    }
+                }
+
+                throw;
+            }
 
             if (previous is not null)
                 previous.HasSavedSession = store.HasSessionSnapshot(previous.Id);
@@ -125,10 +149,16 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
                 Settings.ActiveAccountId = next.Id;
                 next.LastSwitchedAt = DateTimeOffset.UtcNow;
 
-                // The file is now exactly this account's snapshot, so its identity can be adopted.
-                var puuid = await riot.TryReadActiveSessionPuuidAsync();
-                if (string.IsNullOrEmpty(next.Puuid) && !string.IsNullOrEmpty(puuid) && FindByPuuid(puuid) is null)
-                    next.Puuid = puuid;
+                // Post-launch identity adoption is best-effort: a transient startup lock must not fail a completed switch.
+                try
+                {
+                    var puuid = await riot.TryReadActiveSessionPuuidAsync();
+                    if (string.IsNullOrEmpty(next.Puuid) && !string.IsNullOrEmpty(puuid) && FindByPuuid(puuid) is null)
+                        next.Puuid = puuid;
+                }
+                catch (IOException)
+                {
+                }
 
                 await SaveSettingsAsync();
             }
@@ -140,6 +170,12 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
             IsOperating = false;
             NotifyChanged();
         }
+    }
+
+    private async Task<byte[]?> TryCaptureBytesBestEffortAsync()
+    {
+        try { return (await riot.CaptureCurrentSessionAsync()).Bytes; }
+        catch { return null; }
     }
 
     public async Task LaunchAsync(AccountRecord account)
@@ -156,25 +192,26 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
     public async Task<AccountRecord> CaptureAsync(LcuSnapshot? live, string? expectedPuuid, Action<AccountRecord> applyDetails)
     {
         var captured = await riot.CaptureCurrentSessionAsync();
-        var puuid = captured.Puuid ?? live?.Puuid;
+        var sessionPuuid = captured.Puuid;
 
         if (!string.IsNullOrEmpty(expectedPuuid)
-            && !string.Equals(expectedPuuid, puuid, StringComparison.OrdinalIgnoreCase))
+            && !string.Equals(expectedPuuid, sessionPuuid, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("The signed-in Riot account changed before saving. Check the details and try again.");
         }
 
-        // Only apply the LCU snapshot if it matches the exact captured session identity.
-        var matchingLive = live is not null && (string.IsNullOrEmpty(captured.Puuid)
-            || string.Equals(live.Puuid, captured.Puuid, StringComparison.OrdinalIgnoreCase))
+        // Only trust LCU data when the captured session bytes prove it belongs to the same account.
+        var matchingLive = live is not null && !string.IsNullOrEmpty(sessionPuuid)
+            && string.Equals(live.Puuid, sessionPuuid, StringComparison.OrdinalIgnoreCase)
             ? live
             : null;
 
         var entered = new AccountRecord();
         applyDetails(entered);
 
-        var account = FindByPuuid(puuid)
-            ?? _accounts.Find(a => string.IsNullOrEmpty(a.Puuid) && entered.GameName.Length > 0
+        // Fail closed: never match an account that has a known client PUUID unless the captured bytes prove that exact PUUID.
+        var account = FindByPuuid(sessionPuuid)
+            ?? _accounts.Find(a => !Guid.TryParse(a.Puuid, out _) && entered.GameName.Length > 0
                 && string.Equals(a.RiotId, entered.RiotId, StringComparison.OrdinalIgnoreCase));
         var isNew = account is null;
         account ??= new AccountRecord();
@@ -186,8 +223,8 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
         if (matchingLive is not null)
             ApplyLive(account, matchingLive);
         applyDetails(account);
-        if (!string.IsNullOrEmpty(puuid))
-            account.Puuid = puuid;
+        if (!string.IsNullOrEmpty(sessionPuuid))
+            account.Puuid = sessionPuuid;
 
         await MarkCapturedAsync(account);
         return account;
@@ -237,12 +274,21 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
 
         var account = FindByPuuid(live.Puuid);
 
-        // An account captured before its PUUID was known can only be claimed while it is the active one.
+        // An account captured before its PUUID was known can only be claimed while it is active AND the live session file confirms it isn't a stale outgoing LCU.
         if (account is null && Active is { } active && string.IsNullOrEmpty(active.Puuid)
             && (active.GameName.Length == 0
                 || string.Equals(active.RiotId, $"{live.GameName}#{live.TagLine}", StringComparison.OrdinalIgnoreCase)))
         {
-            account = active;
+            string? liveSessionPuuid = null;
+            try { liveSessionPuuid = await riot.TryReadActiveSessionPuuidAsync(); }
+            catch (IOException) { }
+
+            var sessionConfirms = !string.IsNullOrEmpty(liveSessionPuuid)
+                ? string.Equals(liveSessionPuuid, live.Puuid, StringComparison.OrdinalIgnoreCase)
+                : active.GameName.Length > 0;
+
+            if (sessionConfirms)
+                account = active;
         }
 
         var updated = false;
@@ -298,7 +344,9 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
         var before = (a.GameName, a.TagLine, a.SummonerLevel, a.ProfileIconId, a.RankedSolo, a.HasRankData);
 
         if (!string.IsNullOrWhiteSpace(name))
-            (a.GameName, a.TagLine) = (name, tag);
+            a.GameName = name;
+        if (!string.IsNullOrWhiteSpace(tag))
+            a.TagLine = tag;
         if (level > 0)
             a.SummonerLevel = level;
         if (icon >= 0)

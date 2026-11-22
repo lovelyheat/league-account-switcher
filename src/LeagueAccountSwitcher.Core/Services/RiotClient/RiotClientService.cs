@@ -100,7 +100,8 @@ public sealed class RiotClientService : IRiotClientService
         IProgress<string>? progress = null,
         CancellationToken ct = default,
         bool allowCloseRunningMatch = false,
-        bool allowDiscardUnsavedSession = false)
+        bool allowDiscardUnsavedSession = false,
+        string? confirmedDiscardPuuid = null)
     {
         ArgumentNullException.ThrowIfNull(targetAccount);
 
@@ -118,32 +119,42 @@ public sealed class RiotClientService : IRiotClientService
             var clientPath = RequireRiotClientPath(riotClientPathOverride);
             EnsureMatchCanClose(allowCloseRunningMatch);
 
-            // Snapshot file names are case-insensitive on Windows, so the IDs are compared the same way.
-            var outgoingId = string.Equals(currentActiveAccountId, targetAccount.Id, StringComparison.OrdinalIgnoreCase)
-                ? null
-                : currentActiveAccountId;
-            var liveSession = await CloseClientsPreservingSessionAsync(
+            var targetExpectedPuuid = ParseSession(targetSession).Puuid
+                ?? (Guid.TryParse(targetAccount.Puuid, out _) ? targetAccount.Puuid : null)
+                ?? await GetExpectedPuuidAsync(targetAccount.Id, ct).ConfigureAwait(false);
+
+            var isRestartingTarget = string.Equals(currentActiveAccountId, targetAccount.Id, StringComparison.OrdinalIgnoreCase);
+            var outgoingId = isRestartingTarget ? null : currentActiveAccountId;
+
+            var (liveSession, latestTargetSession) = await CloseClientsPreservingSessionAsync(
                 outgoingId,
                 targetAccount.Id,
-                targetSession,
+                targetExpectedPuuid,
+                isRestartingTarget,
                 allowCloseRunningMatch,
                 allowDiscardUnsavedSession,
+                confirmedDiscardPuuid,
                 progress,
                 ct).ConfigureAwait(false);
 
-            if (IsSameSignedInAccount(liveSession, targetSession))
+            if (liveSession is not null && IsLiveSessionForTarget(
+                    ParseSession(liveSession),
+                    targetExpectedPuuid,
+                    isRestartingTarget,
+                    isChangedPostClose: false))
             {
-                // The live file holds newer rotated tokens than the snapshot; also refresh the target backup.
+                // The live file holds newer rotated tokens than the snapshot; ensure its backup is fresh too.
                 await BackUpAsync(targetAccount.Id, liveSession, progress, ct).ConfigureAwait(false);
                 progress?.Report($"{targetAccount.DisplayName} is already signed in. Keeping the current session.");
             }
             else
             {
+                var sessionToRestore = latestTargetSession ?? targetSession;
                 progress?.Report($"Restoring the session for {targetAccount.DisplayName}...");
                 await RetryFileAsync(
                     async () =>
                     {
-                        await AccountStore.WriteAtomicAsync(GetRiotPrivateSettingsPath(), targetSession, ct).ConfigureAwait(false);
+                        await AccountStore.WriteAtomicAsync(GetRiotPrivateSettingsPath(), sessionToRestore, ct).ConfigureAwait(false);
                         return true;
                     },
                     ct).ConfigureAwait(false);
@@ -177,7 +188,8 @@ public sealed class RiotClientService : IRiotClientService
         IProgress<string>? progress = null,
         CancellationToken ct = default,
         bool allowCloseRunningMatch = false,
-        bool allowDiscardUnsavedSession = false)
+        bool allowDiscardUnsavedSession = false,
+        string? confirmedDiscardPuuid = null)
     {
         await _switchGate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -188,9 +200,11 @@ public sealed class RiotClientService : IRiotClientService
             await CloseClientsPreservingSessionAsync(
                 currentActiveAccountId,
                 targetAccountId: null,
-                targetSession: null,
+                targetExpectedPuuid: null,
+                isRestartingTarget: false,
                 allowCloseRunningMatch,
                 allowDiscardUnsavedSession,
+                confirmedDiscardPuuid,
                 progress,
                 ct).ConfigureAwait(false);
 
@@ -218,29 +232,34 @@ public sealed class RiotClientService : IRiotClientService
         }
     }
 
-    private async Task<byte[]?> CloseClientsPreservingSessionAsync(
+    private async Task<(byte[]? AfterClose, byte[]? LatestTargetSession)> CloseClientsPreservingSessionAsync(
         string? outgoingId,
         string? targetAccountId,
-        byte[]? targetSession,
+        string? targetExpectedPuuid,
+        bool isRestartingTarget,
         bool allowCloseRunningMatch,
         bool allowDiscardUnsavedSession,
+        string? confirmedDiscardPuuid,
         IProgress<string>? progress,
         CancellationToken ct)
     {
         var beforeClose = await ReadPrivateSettingsAsync(FileShare.ReadWrite | FileShare.Delete, ct).ConfigureAwait(false);
-        var beforeBackedUp = await PreserveOrCheckSessionAsync(
+        var (beforeBackedUp, latestTarget) = await PreserveOrCheckSessionAsync(
             beforeClose,
             outgoingId,
             targetAccountId,
-            targetSession,
+            targetExpectedPuuid,
+            isRestartingTarget,
+            isChangedPostClose: false,
             allowDiscardUnsavedSession,
+            confirmedDiscardPuuid,
             progress,
             ct).ConfigureAwait(false);
 
         EnsureMatchCanClose(allowCloseRunningMatch);
 
         progress?.Report("Closing Riot and League clients...");
-        await StopClientsAsync(ct).ConfigureAwait(false);
+        await StopClientsAsync(allowCloseRunningMatch, ct).ConfigureAwait(false);
 
         progress?.Report("Waiting for Riot Client to release its files...");
         // An exclusive open succeeds only once every other handle on the file is gone.
@@ -252,67 +271,105 @@ public sealed class RiotClientService : IRiotClientService
             if (changed || !beforeBackedUp)
             {
                 // Riot can write rotated tokens or finish signing in while shutting down.
-                await PreserveOrCheckSessionAsync(
+                var (_, postCloseTarget) = await PreserveOrCheckSessionAsync(
                     afterClose,
                     outgoingId,
                     targetAccountId,
-                    targetSession,
+                    targetExpectedPuuid,
+                    isRestartingTarget,
+                    isChangedPostClose: changed,
                     allowDiscardUnsavedSession,
+                    confirmedDiscardPuuid,
                     progress,
                     ct).ConfigureAwait(false);
+                if (postCloseTarget is not null)
+                    latestTarget = postCloseTarget;
             }
         }
 
-        return afterClose;
+        return (afterClose, latestTarget);
     }
 
-    private async Task<bool> PreserveOrCheckSessionAsync(
+    private async Task<(bool BackedUp, byte[]? TargetSession)> PreserveOrCheckSessionAsync(
         byte[]? sessionBytes,
         string? outgoingId,
         string? targetAccountId,
-        byte[]? targetSession,
+        string? targetExpectedPuuid,
+        bool isRestartingTarget,
+        bool isChangedPostClose,
         bool allowDiscardUnsavedSession,
+        string? confirmedDiscardPuuid,
         IProgress<string>? progress,
         CancellationToken ct)
     {
         if (sessionBytes is null)
-            return false;
+            return (false, null);
 
         var live = ParseSession(sessionBytes);
         if (!live.HasSession)
-            return false;
+            return (false, null);
 
-        // If the live session already belongs to the target account being launched/restarted, keep it safe.
-        if (targetSession is not null && IsSameSignedInAccount(sessionBytes, targetSession))
+        // 1. If the live session belongs to the target account being launched/restarted, preserve it on the target.
+        if (!string.IsNullOrWhiteSpace(targetAccountId)
+            && IsLiveSessionForTarget(live, targetExpectedPuuid, isRestartingTarget, isChangedPostClose))
         {
-            if (!string.IsNullOrWhiteSpace(targetAccountId))
-                await BackUpAsync(targetAccountId, sessionBytes, progress, ct).ConfigureAwait(false);
-            return true;
+            if (await BackUpAsync(targetAccountId, sessionBytes, progress, ct).ConfigureAwait(false))
+                return (true, sessionBytes);
         }
 
-        // First try backing up to the explicitly specified outgoing account (if its identity matches).
-        if (!string.IsNullOrWhiteSpace(outgoingId) &&
-            await BackUpAsync(outgoingId, sessionBytes, progress, ct).ConfigureAwait(false))
-        {
-            return true;
-        }
-
-        // Otherwise, resolve the true owner by PUUID from saved accounts so rotated tokens are never lost.
+        // 2. Always resolve by PUUID first so another saved account's session is never written over an outgoing account with no known PUUID.
         if (live.Puuid is not null &&
-            await FindOwnerAccountIdByPuuidAsync(live.Puuid, ct).ConfigureAwait(false) is { } ownerId &&
-            !string.Equals(ownerId, targetAccountId, StringComparison.OrdinalIgnoreCase) &&
-            await BackUpAsync(ownerId, sessionBytes, progress, ct).ConfigureAwait(false))
+            await FindOwnerAccountIdByPuuidAsync(live.Puuid, ct).ConfigureAwait(false) is { } ownerId)
         {
-            return true;
+            if (string.Equals(ownerId, targetAccountId, StringComparison.OrdinalIgnoreCase))
+            {
+                if (await BackUpAsync(ownerId, sessionBytes, progress, ct).ConfigureAwait(false))
+                    return (true, sessionBytes);
+            }
+            else if (await BackUpAsync(ownerId, sessionBytes, progress, ct).ConfigureAwait(false))
+            {
+                return (true, null);
+            }
         }
 
-        if (!allowDiscardUnsavedSession)
+        // 3. Fall back to the explicitly specified outgoing account only if identity is provable (or pre-close with no conflicting owner).
+        if (!string.IsNullOrWhiteSpace(outgoingId))
+        {
+            var outgoingExpectedPuuid = await GetExpectedPuuidAsync(outgoingId, ct).ConfigureAwait(false);
+            var canAssignToOutgoing = outgoingExpectedPuuid is not null
+                ? live.Puuid is not null && outgoingExpectedPuuid.Equals(live.Puuid, StringComparison.OrdinalIgnoreCase)
+                : !isChangedPostClose;
+
+            if (canAssignToOutgoing && await BackUpAsync(outgoingId, sessionBytes, progress, ct).ConfigureAwait(false))
+                return (true, null);
+        }
+
+        var discardMatchesConsent = allowDiscardUnsavedSession && (confirmedDiscardPuuid is null
+            || string.Equals(live.Puuid ?? string.Empty, confirmedDiscardPuuid, StringComparison.OrdinalIgnoreCase));
+
+        if (!discardMatchesConsent)
         {
             throw new InvalidOperationException(
-                "The currently signed-in Riot account isn't saved. Capture it first, or confirm replacing it.");
+                "The currently signed-in Riot account isn't saved (or changed before switching). Capture it first, or confirm replacing it.");
         }
 
-        return false;
+        return (false, null);
+    }
+
+    private static bool IsLiveSessionForTarget(
+        RiotSessionInfo live,
+        string? targetExpectedPuuid,
+        bool isRestartingTarget,
+        bool isChangedPostClose)
+    {
+        if (!live.HasSession)
+            return false;
+
+        if (targetExpectedPuuid is not null)
+            return live.Puuid is not null && targetExpectedPuuid.Equals(live.Puuid, StringComparison.OrdinalIgnoreCase);
+
+        // When target has no known PUUID, only treat an unidentified pre-close session as the target if we are explicitly restarting it.
+        return isRestartingTarget && !isChangedPostClose && live.Puuid is null;
     }
 
     private async Task<bool> BackUpAsync(string accountId, byte[]? session, IProgress<string>? progress, CancellationToken ct)
@@ -382,7 +439,7 @@ public sealed class RiotClientService : IRiotClientService
         }
     }
 
-    private async Task StopClientsAsync(CancellationToken ct)
+    private async Task StopClientsAsync(bool allowCloseRunningMatch, CancellationToken ct)
     {
         var processes = _environment.Processes;
         bool AnyRunning() => ProcessesToStop.Any(processes.IsRunning);
@@ -393,14 +450,23 @@ public sealed class RiotClientService : IRiotClientService
         var elapsed = Stopwatch.StartNew();
         var closeRequested = false;
         foreach (var name in ProcessesToStop)
+        {
+            if (name == "League of Legends" && !allowCloseRunningMatch)
+                continue;
             closeRequested |= processes.RequestClose(name);
+        }
 
         while (closeRequested && elapsed.Elapsed < _environment.CloseGracePeriod && AnyRunning())
             await Task.Delay(100, ct).ConfigureAwait(false);
 
+        // Re-check before force killing in case a match launched during the close grace period.
+        EnsureMatchCanClose(allowCloseRunningMatch);
+
         var delay = 100;
         while (AnyRunning())
         {
+            EnsureMatchCanClose(allowCloseRunningMatch);
+
             if (elapsed.Elapsed >= _environment.Timeout)
             {
                 throw new InvalidOperationException(
@@ -499,11 +565,6 @@ public sealed class RiotClientService : IRiotClientService
         var path = Path.Combine(_environment.LocalAppData, "Riot Games", "Riot Client", "Config", "RiotClientSettings.yaml");
         return RiotYamlSessionParser.Parse(RiotClientPathDiscovery.ReadTextOrNull(path)).Region;
     }
-
-    private static bool IsSameSignedInAccount(byte[]? live, byte[] target) =>
-        live is not null &&
-        ParseSession(live) is { HasSession: true, Puuid: { } puuid } &&
-        puuid.Equals(ParseSession(target).Puuid, StringComparison.OrdinalIgnoreCase);
 
     private static RiotSessionInfo ParseSession(byte[] bytes) => RiotYamlSessionParser.Parse(Encoding.UTF8.GetString(bytes));
 

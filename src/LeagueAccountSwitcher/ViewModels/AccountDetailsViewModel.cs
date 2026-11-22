@@ -70,10 +70,9 @@ public sealed partial class AccountDetailsViewModel : ObservableObject
 
         target.Alias = string.IsNullOrWhiteSpace(Alias) ? null : Alias.Trim();
         if (!string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(target.GameName))
-        {
             target.GameName = name;
+        if (!string.IsNullOrWhiteSpace(tag) || string.IsNullOrWhiteSpace(target.TagLine))
             target.TagLine = tag;
-        }
 
         if (Helpers.Regions.Known(Region) is { } knownRegion)
             target.Region = knownRegion;
@@ -91,18 +90,29 @@ public sealed partial class AccountDetailsViewModel : ObservableObject
         }
     }
 
-    /// <summary>Applies only the fields modified by the user so concurrent LCU syncs aren't overwritten.</summary>
+    /// <summary>Applies only the specific fields modified by the user so concurrent LCU syncs aren't reverted.</summary>
     public void ApplyChangesTo(AccountRecord target)
     {
         if (!string.Equals(Alias, _initialAlias, StringComparison.Ordinal))
             target.Alias = string.IsNullOrWhiteSpace(Alias) ? null : Alias.Trim();
 
-        if (!string.Equals(GameName, _initialGameName, StringComparison.Ordinal)
-            || !string.Equals(TagLine, _initialTagLine, StringComparison.Ordinal))
+        var nameChanged = !string.Equals(GameName, _initialGameName, StringComparison.Ordinal);
+        var tagChanged = !string.Equals(TagLine, _initialTagLine, StringComparison.Ordinal);
+        if (nameChanged || tagChanged)
         {
-            var (name, tag) = ParseRiotId();
-            target.GameName = name;
-            target.TagLine = tag;
+            var rawName = GameName.Trim();
+            if (nameChanged && rawName.IndexOf('#') is >= 0 and var hash)
+            {
+                target.GameName = rawName[..hash].Trim();
+                target.TagLine = rawName[(hash + 1)..].Trim();
+            }
+            else
+            {
+                if (nameChanged)
+                    target.GameName = rawName;
+                if (tagChanged)
+                    target.TagLine = TagLine.Trim().TrimStart('#');
+            }
         }
 
         if (!string.Equals(Region, _initialRegion, StringComparison.Ordinal) && Region is not null)
@@ -111,9 +121,38 @@ public sealed partial class AccountDetailsViewModel : ObservableObject
         if (!SameNumber(Level, _initialLevel))
             target.SummonerLevel = ToCount(Level) is > 0 and var level ? level : null;
 
-        if (HasRankChanged())
+        var tierChanged = !string.Equals(Tier, _initialTier, StringComparison.Ordinal);
+        var divisionChanged = !string.Equals(Division, _initialDivision, StringComparison.Ordinal);
+        var lpChanged = !SameNumber(LeaguePoints, _initialLeaguePoints);
+        var winsChanged = !SameNumber(Wins, _initialWins);
+        var lossesChanged = !SameNumber(Losses, _initialLosses);
+
+        if (tierChanged || divisionChanged || lpChanged || winsChanged || lossesChanged)
         {
-            ApplyRankTo(target);
+            var updated = target.RankedSolo;
+            if (tierChanged)
+            {
+                updated = updated with
+                {
+                    Tier = IsRanked ? Tier!.ToUpperInvariant() : "UNRANKED",
+                    Division = HasDivision ? Division ?? "IV" : string.Empty,
+                    LeaguePoints = IsRanked ? (lpChanged ? ToCount(LeaguePoints) : updated.LeaguePoints) : 0,
+                };
+            }
+            else
+            {
+                if (divisionChanged && updated.IsRanked && !updated.IsApexTier)
+                    updated = updated with { Division = Division ?? "IV" };
+                if (lpChanged && updated.IsRanked)
+                    updated = updated with { LeaguePoints = ToCount(LeaguePoints) };
+            }
+
+            if (winsChanged)
+                updated = updated with { Wins = ToCount(Wins) };
+            if (lossesChanged)
+                updated = updated with { Losses = ToCount(Losses) };
+
+            target.RankedSolo = updated;
             target.HasRankData = true;
         }
     }

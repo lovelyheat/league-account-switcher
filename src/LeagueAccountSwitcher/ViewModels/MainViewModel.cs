@@ -442,6 +442,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
             var allowCloseMatch = false;
             var allowDiscardUnsaved = false;
+            string? confirmedDiscardPuuid = null;
 
             launchOnly = owner == account && !running;
             if (!launchOnly)
@@ -456,10 +457,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
                 if (owner is null && await Task.Run(_riot.HasActiveRiotSession))
                 {
+                    var unsavedPuuid = await _riot.TryReadActiveSessionPuuidAsync() ?? string.Empty;
                     if (!await _dialogs.ConfirmAsync("Current sign-in isn't saved",
                             "The account signed in now will be replaced and you'll need to sign in to it again. To keep it, cancel and use Add Account first.", "Switch anyway"))
                         return;
                     allowDiscardUnsaved = true;
+                    confirmedDiscardPuuid = unsavedPuuid;
                 }
 
                 if (owner == account && !inMatch && !await _dialogs.ConfirmAsync("Restart League?",
@@ -485,7 +488,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                             Notify(text);
                     }),
                     allowCloseRunningMatch: allowCloseMatch,
-                    allowDiscardUnsavedSession: allowDiscardUnsaved);
+                    allowDiscardUnsavedSession: allowDiscardUnsaved,
+                    confirmedDiscardPuuid: confirmedDiscardPuuid);
                 Notify($"Switched to {account.RiotId}", InfoBarSeverity.Success);
             }
         });

@@ -9,9 +9,11 @@ namespace LeagueAccountSwitcher;
 public partial class App : Application
 {
     private const string InstanceKey = "LeagueAccountSwitcher.Main";
+    private const string SingleInstanceMutexName = @"Local\LeagueAccountSwitcher.SingleInstance.v1";
 
     private MainWindow? _window;
     private AppInstance? _instance;
+    private Mutex? _singleInstanceMutex;
 
     public App()
     {
@@ -20,12 +22,33 @@ public partial class App : Application
 
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
-        // Prevent multiple instances from overwriting each other's accounts.json or racing Riot switches.
+        // Enforce single instance across ALL executable paths (e.g., Debug vs Release or copied folders) per Windows user session.
+        var mutex = new Mutex(initiallyOwned: true, name: SingleInstanceMutexName, out var createdNew);
+        if (!createdNew)
+        {
+            mutex.Dispose();
+            try
+            {
+                var existing = AppInstance.FindOrRegisterForKey(InstanceKey);
+                if (!existing.IsCurrent)
+                    await existing.RedirectActivationToAsync(AppInstance.GetCurrent().GetActivatedEventArgs());
+            }
+            catch
+            {
+                // Best-effort focus handoff when launched from a different executable path.
+            }
+
+            Exit();
+            return;
+        }
+
+        _singleInstanceMutex = mutex;
+
         var instance = AppInstance.FindOrRegisterForKey(InstanceKey);
         if (!instance.IsCurrent)
         {
-            var activationArgs = AppInstance.GetCurrent().GetActivatedEventArgs();
-            await instance.RedirectActivationToAsync(activationArgs);
+            await instance.RedirectActivationToAsync(AppInstance.GetCurrent().GetActivatedEventArgs());
+            ReleaseMutex();
             Exit();
             return;
         }
@@ -42,8 +65,20 @@ public partial class App : Application
             if (_instance is not null)
                 _instance.Activated -= OnInstanceActivated;
             services.Dispose();
+            ReleaseMutex();
         };
         _window.Activate();
+    }
+
+    private void ReleaseMutex()
+    {
+        if (_singleInstanceMutex is null)
+            return;
+
+        try { _singleInstanceMutex.ReleaseMutex(); }
+        catch (ApplicationException) { }
+        _singleInstanceMutex.Dispose();
+        _singleInstanceMutex = null;
     }
 
     private void OnInstanceActivated(object? sender, AppActivationArguments e)

@@ -9,8 +9,12 @@ namespace LeagueAccountSwitcher.ViewModels;
 
 public sealed partial class AccountItemViewModel : ObservableObject
 {
+    private static readonly TimeSpan AvatarRetryCooldown = TimeSpan.FromMinutes(5);
+
     private readonly IAssetCacheService _assets;
     private int? _iconId;
+    private int? _failedIconId;
+    private DateTimeOffset _nextAvatarRetryUtc = DateTimeOffset.MinValue;
 
     [ObservableProperty] private string _title = string.Empty;
     [ObservableProperty] private string _tag = string.Empty;
@@ -64,12 +68,14 @@ public sealed partial class AccountItemViewModel : ObservableObject
         Region = Helpers.Regions.Known(Record.Region) ?? "—";
         Level = Record.SummonerLevel is > 0 and var level ? $"Lv. {level}" : "Lv. —";
 
-        var hasRank = Record.HasRankData || Record.LastSyncedAt is not null || Record.RankedSolo.IsRanked || Record.RankedSolo.TotalGames > 0;
-        Tier = Record.RankedSolo.NormalizedTier;
+        var hasRank = Record.HasRankData || Record.RankedSolo.IsRanked || Record.RankedSolo.TotalGames > 0;
+        Tier = hasRank ? Record.RankedSolo.NormalizedTier : "UNRANKED";
         Rank = hasRank ? Record.RankedSolo.FormattedRank : "Not synced";
-        WinLoss = Record.RankedSolo.FormattedRecord;
+        WinLoss = hasRank ? Record.RankedSolo.FormattedRecord : string.Empty;
         SyncedText = Record.LastSyncedAt is { } at
-            ? $"Ranked Solo/Duo, synced {at.LocalDateTime:g}"
+            ? hasRank
+                ? $"Ranked Solo/Duo, synced {at.LocalDateTime:g}"
+                : $"Synced {at.LocalDateTime:g} (rank unavailable)"
             : hasRank
                 ? "Ranked Solo/Duo (manually entered)"
                 : "Ranked Solo/Duo, not synced yet";
@@ -83,16 +89,32 @@ public sealed partial class AccountItemViewModel : ObservableObject
         if (id is null || (id == _iconId && AvatarPath.Length > 0))
             return;
 
+        if (id == _failedIconId && DateTimeOffset.UtcNow < _nextAvatarRetryUtc)
+            return;
+
         _iconId = id;
         try
         {
             var path = await _assets.GetProfileIconPathAsync(id);
-            if (id == _iconId)
-                AvatarPath = path ?? string.Empty;
+            if (id != _iconId)
+                return;
+
+            if (!string.IsNullOrEmpty(path))
+            {
+                _failedIconId = null;
+                AvatarPath = path;
+            }
+            else
+            {
+                _failedIconId = id;
+                _nextAvatarRetryUtc = DateTimeOffset.UtcNow + AvatarRetryCooldown;
+                AvatarPath = string.Empty;
+            }
         }
         catch (Exception ex)
         {
-            // The monogram stays; the next update retries.
+            _failedIconId = id;
+            _nextAvatarRetryUtc = DateTimeOffset.UtcNow + AvatarRetryCooldown;
             Debug.WriteLine(ex);
         }
     }

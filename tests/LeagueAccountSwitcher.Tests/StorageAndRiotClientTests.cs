@@ -975,6 +975,90 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
     }
 
     [Fact]
+    public async Task Discard_consent_is_bound_to_the_confirmed_puuid()
+    {
+        await SaveTargetAsync();
+        SetLiveSession(Session(StrangerPuuid));
+
+        // Confirmed for a different PUUID -> must refuse!
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _service.SwitchToAccountAsync(
+            _target,
+            null,
+            LaunchTarget.LeagueOfLegends,
+            allowDiscardUnsavedSession: true,
+            confirmedDiscardPuuid: OutgoingPuuid));
+
+        // Confirmed for the exact live PUUID -> succeeds!
+        await _service.SwitchToAccountAsync(
+            _target,
+            null,
+            LaunchTarget.LeagueOfLegends,
+            allowDiscardUnsavedSession: true,
+            confirmedDiscardPuuid: StrangerPuuid);
+
+        Assert.Equal(Session(TargetPuuid), File.ReadAllBytes(SettingsPath));
+    }
+
+    [Fact]
+    public async Task Restart_on_active_target_works_when_saved_snapshot_lacks_sub_cookie()
+    {
+        var noSubSnapshot = "riot-login:\n    persist:\n        session:\n            cookies:\n            -   name: \"ssid\"\n                value: \"old-token\"\n"u8.ToArray();
+        await _store.SaveSessionSnapshotAsync("target", noSubSnapshot);
+        var targetWithPuuid = new AccountRecord { Id = "target", Puuid = TargetPuuid, GameName = "Target", TagLine = "EUW" };
+        var live = Session(TargetPuuid, "fresh-token");
+        SetLiveSession(live);
+
+        await _service.SwitchToAccountAsync(targetWithPuuid, "target", LaunchTarget.LeagueOfLegends);
+
+        Assert.Equal(live, File.ReadAllBytes(SettingsPath));
+        Assert.Equal(live, await _store.LoadSessionSnapshotAsync("target"));
+    }
+
+    [Fact]
+    public async Task Restart_restores_pre_close_rotated_target_tokens_if_shutdown_clears_session()
+    {
+        await SaveTargetAsync();
+        var rotated = Session(TargetPuuid, "rotated-before-close");
+        SetLiveSession(rotated);
+        _processes.Running.Add("RiotClientServices");
+        _processes.OnKill = () => File.WriteAllText(SettingsPath, "riot-login:\n    persist: null");
+
+        await SwitchAsync("target");
+
+        Assert.Equal(rotated, File.ReadAllBytes(SettingsPath));
+        Assert.Equal(rotated, await _store.LoadSessionSnapshotAsync("target"));
+    }
+
+    [Fact]
+    public async Task Match_starting_during_close_grace_period_aborts_before_killing()
+    {
+        await SaveTargetAsync();
+        _processes.Running.Add("RiotClientServices");
+        _processes.OnClose = () => _processes.Running.Add("League of Legends");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SwitchAsync());
+
+        Assert.DoesNotContain("League of Legends", _processes.Killed);
+        Assert.Null(_processes.StartedPath);
+    }
+
+    [Fact]
+    public async Task Puuid_owner_is_backed_up_before_falling_back_to_unidentified_outgoing_account()
+    {
+        await SaveTargetAsync();
+        var noSubOutgoing = "riot-login:\n    persist:\n        session:\n            cookies:\n            -   name: \"ssid\"\n                value: \"outgoing-token\"\n"u8.ToArray();
+        await _store.SaveSessionSnapshotAsync("outgoing", noSubOutgoing);
+        await _store.SaveAccountsAsync([new AccountRecord { Id = "real-owner", Puuid = StrangerPuuid }]);
+        var realOwnerLive = Session(StrangerPuuid, "real-owner-fresh");
+        SetLiveSession(realOwnerLive);
+
+        await SwitchAsync("outgoing");
+
+        Assert.Equal(noSubOutgoing, await _store.LoadSessionSnapshotAsync("outgoing"));
+        Assert.Equal(realOwnerLive, await _store.LoadSessionSnapshotAsync("real-owner"));
+    }
+
+    [Fact]
     public async Task Switch_reports_progress()
     {
         await SaveTargetAsync();

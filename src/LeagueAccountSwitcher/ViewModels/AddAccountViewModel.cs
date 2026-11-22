@@ -132,6 +132,7 @@ public sealed partial class AddAccountViewModel(
 
         var hasUnsaved = await accounts.HasUnsavedSessionAsync();
         var allowDiscard = false;
+        string? confirmedDiscardPuuid = null;
         if (hasUnsaved)
         {
             var liveKey = await riot.TryReadActiveSessionPuuidAsync() ?? string.Empty;
@@ -144,6 +145,7 @@ public sealed partial class AddAccountViewModel(
             }
 
             allowDiscard = true;
+            confirmedDiscardPuuid = liveKey;
         }
 
         var allowCloseMatch = inMatch && _matchCloseConfirmed;
@@ -157,7 +159,8 @@ public sealed partial class AddAccountViewModel(
                     Show(text);
             }),
             allowCloseRunningMatch: allowCloseMatch,
-            allowDiscardUnsavedSession: allowDiscard);
+            allowDiscardUnsavedSession: allowDiscard,
+            confirmedDiscardPuuid: confirmedDiscardPuuid);
 
         IsLoginOpen = true;
         OpenLoginText = "Open Clean Login Again";

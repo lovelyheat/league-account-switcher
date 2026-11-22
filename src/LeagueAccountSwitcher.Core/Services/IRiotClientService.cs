@@ -26,7 +26,8 @@ public interface IRiotClientService
         IProgress<string>? progress = null,
         CancellationToken ct = default,
         bool allowCloseRunningMatch = false,
-        bool allowDiscardUnsavedSession = false);
+        bool allowDiscardUnsavedSession = false,
+        string? confirmedDiscardPuuid = null);
 
     Task LaunchClientAsync(
         LaunchTarget launchTarget,
@@ -39,5 +40,6 @@ public interface IRiotClientService
         IProgress<string>? progress = null,
         CancellationToken ct = default,
         bool allowCloseRunningMatch = false,
-        bool allowDiscardUnsavedSession = false);
+        bool allowDiscardUnsavedSession = false,
+        string? confirmedDiscardPuuid = null);
 }
