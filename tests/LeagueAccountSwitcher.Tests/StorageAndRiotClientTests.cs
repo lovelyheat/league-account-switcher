@@ -545,6 +545,97 @@ public sealed class RiotYamlSessionParserTests
         Assert.False(RiotYamlSessionParser.Parse(yaml).HasSession);
     }
 
+    [Fact]
+    public void Psl_authorization_null_is_not_a_session()
+    {
+        const string yaml = """
+            psl:
+                authorization:
+                    riot-client: null
+            rso-authenticator:
+                tdid:
+                    name: "tdid"
+                    value: "device-token"
+            """;
+
+        Assert.Equal(new RiotSessionInfo(false, null, null), RiotYamlSessionParser.Parse(yaml));
+    }
+
+    [Fact]
+    public void Psl_authorization_scalar_and_nested_formats_are_recognized()
+    {
+        const string scalarYaml = """
+            psl:
+                authorization:
+                    riot-client: "opaque-encrypted-refresh-token"
+            rso-authenticator:
+                tdid:
+                    name: "tdid"
+                    value: "device-token"
+            """;
+
+        Assert.Equal(new RiotSessionInfo(true, null, null), RiotYamlSessionParser.Parse(scalarYaml));
+
+        var nestedYaml = $"""
+            psl:
+                authorization:
+                    riot-client:
+                        refreshToken: "rt-123"
+                        sub: "{Puuid}"
+            """;
+
+        Assert.Equal(new RiotSessionInfo(true, Puuid, null), RiotYamlSessionParser.Parse(nestedYaml));
+    }
+
+    [Fact]
+    public void Psl_authorization_extracts_puuid_from_jwt_payload()
+    {
+        var payloadJson = $"{{\"sub\":\"{Puuid}\",\"iss\":\"https://auth.riotgames.com\"}}";
+        var payloadB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(payloadJson))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var jwt = $"eyJhbGciOiJSUzI1NiJ9.{payloadB64}.signature";
+
+        var yaml = $"""
+            psl:
+                authorization:
+                    riot-client:
+                        token: "{jwt}"
+            """;
+
+        Assert.Equal(new RiotSessionInfo(true, Puuid, null), RiotYamlSessionParser.Parse(yaml));
+    }
+
+    [Fact]
+    public void Riot_client_local_api_parses_psl_session_json()
+    {
+        var json = $$"""
+            {
+                "loginState": "PendingProductContext",
+                "puuid": "{{Puuid}}",
+                "persistence": { "country": null, "puuid": null },
+                "accessToken": { "scopes": ["openid", "lol", "offline_access"] },
+                "riotID": { "gameName": "PlayerOne", "tagLine": "EUW" },
+                "userInfo": {
+                    "region": { "id": "EUW1", "tag": "euw" },
+                    "lol_account": { "summoner_level": 386, "profile_icon": 16 }
+                }
+            }
+            """;
+
+        var parsed = RiotClientLocalApi.TryParseSessionJson(json);
+
+        Assert.NotNull(parsed);
+        Assert.Equal(Puuid, parsed.Puuid);
+        Assert.Equal("PlayerOne", parsed.GameName);
+        Assert.Equal("EUW", parsed.TagLine);
+        Assert.Equal("EUW", parsed.Region);
+        Assert.Equal(386, parsed.SummonerLevel);
+        Assert.Equal(16, parsed.ProfileIconId);
+        Assert.Equal("PendingProductContext", parsed.LoginState);
+        Assert.Null(parsed.PersistedPuuid);
+        Assert.True(parsed.HasOfflineAccess);
+    }
+
     [Theory]
     [InlineData("install:\n    globals:\n        locale: \"en_US\"\n        region: \"EUW\"", "EUW")]
     [InlineData("region: na1", "NA")]
@@ -1071,7 +1162,7 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
     }
 
     [Fact]
-    public async Task Fresh_login_backs_up_clears_and_launches_plain_client()
+    public async Task Fresh_login_backs_up_clears_and_launches_with_league_product_context()
     {
         var live = Session(OutgoingPuuid);
         SetLiveSession(live);
@@ -1084,7 +1175,7 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
         Assert.False(File.Exists(SettingsPath));
         Assert.False(File.Exists(SettingsPath + ".bak"));
         Assert.Contains("RiotClientServices", _processes.Killed);
-        Assert.Empty(_processes.StartedArguments!);
+        Assert.Equal(["--launch-product=league_of_legends", "--launch-patchline=live"], _processes.StartedArguments);
     }
 
     [Fact]

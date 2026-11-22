@@ -23,3 +23,14 @@ public sealed record CapturedSession(
     byte[] Bytes,
     string? Puuid,
     string? Region);
+
+public sealed record RiotClientLiveAccount(
+    string Puuid,
+    string GameName,
+    string TagLine,
+    string Region,
+    int? SummonerLevel,
+    int? ProfileIconId,
+    string? LoginState,
+    string? PersistedPuuid,
+    bool HasOfflineAccess);

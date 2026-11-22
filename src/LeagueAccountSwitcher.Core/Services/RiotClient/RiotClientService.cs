@@ -63,17 +63,45 @@ public sealed class RiotClientService : IRiotClientService
     public bool IsMatchRunning() =>
         _environment.Processes.IsRunning("League of Legends");
 
+    public Task<RiotClientLiveAccount?> TryReadLiveRiotClientAccountAsync(CancellationToken ct = default) =>
+        RiotClientLocalApi.TryFetchAsync(_environment.LocalAppData, ct);
+
     public async Task<CapturedSession> CaptureCurrentSessionAsync(CancellationToken ct = default)
     {
         var bytes = await ReadPrivateSettingsAsync(FileShare.ReadWrite | FileShare.Delete, ct).ConfigureAwait(false);
-        if (bytes is null)
-            throw NoSignedInSessionException();
+        var parsed = bytes is null ? new RiotSessionInfo(false, null, null) : ParseSession(bytes);
+        if (bytes is null || !parsed.HasSession)
+        {
+            var live = await TryReadLiveRiotClientAccountAsync(ct).ConfigureAwait(false);
+            if (live is not null)
+            {
+                if (!live.HasOfflineAccess)
+                {
+                    throw new InvalidOperationException(
+                        "You're signed in to Riot Client, but \"Stay signed in\" wasn't checked. Sign out, sign back in with \"Stay signed in\" checked, then try again.");
+                }
 
-        var parsed = ParseSession(bytes);
-        if (!parsed.HasSession)
-            throw NoSignedInSessionException();
+                throw new InvalidOperationException(
+                    "Riot Client hasn't written your saved sign-in to disk yet. Click Play / open League of Legends in Riot Client (with \"Stay signed in\" checked), then try again.");
+            }
 
-        return new CapturedSession(bytes, parsed.Puuid, parsed.Region);
+            throw NoSignedInSessionException();
+        }
+
+        var puuid = parsed.Puuid;
+        var region = parsed.Region;
+        if (puuid is null || region is null)
+        {
+            var live = await TryReadLiveRiotClientAccountAsync(ct).ConfigureAwait(false);
+            if (live is not null)
+            {
+                puuid ??= live.PersistedPuuid ?? live.Puuid;
+                if (region is null && live.Region != "Unknown")
+                    region = live.Region;
+            }
+        }
+
+        return new CapturedSession(bytes, puuid, region);
     }
 
     public async Task<byte[]> CaptureCurrentSessionBytesAsync(CancellationToken ct = default) =>
@@ -82,14 +110,32 @@ public sealed class RiotClientService : IRiotClientService
     public async Task<string?> TryReadActiveSessionPuuidAsync(CancellationToken ct = default)
     {
         var bytes = await ReadPrivateSettingsAsync(FileShare.ReadWrite | FileShare.Delete, ct).ConfigureAwait(false);
-        return bytes is null ? null : ParseSession(bytes).Puuid;
+        if (bytes is null)
+            return null;
+
+        var parsed = ParseSession(bytes);
+        if (!parsed.HasSession)
+            return null;
+
+        if (parsed.Puuid is not null)
+            return parsed.Puuid;
+
+        var live = await TryReadLiveRiotClientAccountAsync(ct).ConfigureAwait(false);
+        return live?.PersistedPuuid ?? live?.Puuid;
     }
 
     public async Task<string?> TryReadActiveSessionRegionAsync(CancellationToken ct = default)
     {
         var bytes = await ReadPrivateSettingsAsync(FileShare.ReadWrite | FileShare.Delete, ct).ConfigureAwait(false);
         var fromPrivate = bytes is null ? null : ParseSession(bytes).Region;
-        return fromPrivate ?? ReadClientSettingsRegion();
+        if (fromPrivate is not null)
+            return fromPrivate;
+
+        var live = await TryReadLiveRiotClientAccountAsync(ct).ConfigureAwait(false);
+        if (live is not null && live.Region != "Unknown")
+            return live.Region;
+
+        return ReadClientSettingsRegion();
     }
 
     public async Task SwitchToAccountAsync(
@@ -223,7 +269,8 @@ public sealed class RiotClientService : IRiotClientService
             }
 
             progress?.Report("Launching Riot Client...");
-            Launch(clientPath, LaunchTarget.RiotClientOnly);
+            // Launch with League product context so Riot Client persists psl.authorization.riot-client immediately upon sign-in.
+            Launch(clientPath, LaunchTarget.LeagueOfLegends);
             progress?.Report("Sign in to the new account with \"Stay signed in\" checked.");
         }
         finally

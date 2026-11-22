@@ -221,7 +221,20 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
         if (isNew)
             _accounts.Add(account);
         if (matchingLive is not null)
+        {
             ApplyLive(account, matchingLive);
+        }
+        else if (await riot.TryReadLiveRiotClientAccountAsync() is { } rc
+            && !string.IsNullOrEmpty(sessionPuuid)
+            && string.Equals(rc.Puuid, sessionPuuid, StringComparison.OrdinalIgnoreCase))
+        {
+            if (rc.ProfileIconId is >= 0)
+                account.ProfileIconId = rc.ProfileIconId;
+            if (rc.SummonerLevel is > 0 && account.SummonerLevel is null)
+                account.SummonerLevel = rc.SummonerLevel;
+            if (Regions.Known(rc.Region) is { } rcRegion && Regions.Known(account.Region) is null)
+                account.Region = rcRegion;
+        }
         applyDetails(account);
         if (!string.IsNullOrEmpty(sessionPuuid))
             account.Puuid = sessionPuuid;

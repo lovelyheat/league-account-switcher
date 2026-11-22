@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using LeagueAccountSwitcher.Core.Models;
 
 namespace LeagueAccountSwitcher.Core.Services.RiotClient;
@@ -7,7 +9,9 @@ public sealed record RiotSessionInfo(bool HasSession, string? Puuid, string? Reg
 // shortcut: reads block-style YAML with single-line scalars only, switch to YamlDotNet if Riot emits flow style.
 public static class RiotYamlSessionParser
 {
-    private const string CookiesPath = "riot-login/persist/session/cookies";
+    private const string LegacyCookiesPath = "riot-login/persist/session/cookies";
+    private const string PslAuthorizationParent = "psl/authorization";
+    private const string PslRiotClientPath = "psl/authorization/riot-client";
 
     internal readonly record struct Entry(string ParentPath, int Item, string Key, string Value);
 
@@ -15,8 +19,8 @@ public static class RiotYamlSessionParser
     {
         var entries = ReadEntries(yaml);
 
-        var cookies = entries
-            .Where(e => e.ParentPath == CookiesPath)
+        var legacyCookies = entries
+            .Where(e => e.ParentPath == LegacyCookiesPath)
             .GroupBy(e => e.Item)
             .Select(cookie => (
                 Name: cookie.FirstOrDefault(e => e.Key == "name").Value,
@@ -24,13 +28,80 @@ public static class RiotYamlSessionParser
             .Where(cookie => !string.IsNullOrWhiteSpace(cookie.Value))
             .ToList();
 
-        var puuid = cookies.FirstOrDefault(c => c.Name == "sub").Value;
+        var legacyPuuid = legacyCookies.FirstOrDefault(c => c.Name == "sub").Value;
+        var hasLegacySession = legacyCookies.Any(c => c.Name == "ssid");
 
-        // `tdid` only identifies the device and outlives sign-out, and `sub` without `ssid`
-        // cannot authenticate Riot Client. Require a non-empty `ssid` cookie to count as signed in.
-        var hasSession = cookies.Any(c => c.Name == "ssid");
+        // Modern Riot Client (2025+) stores persistent login tokens under `psl.authorization.riot-client`.
+        // When signed out or not persisted, Riot writes `riot-client: null` (which ReadScalar turns into empty string).
+        var pslEntries = entries
+            .Where(e => !string.IsNullOrWhiteSpace(e.Value) && IsPslAuthorizationEntry(e))
+            .ToList();
+        var hasPslSession = pslEntries.Count > 0;
+
+        var puuid = legacyPuuid ?? ExtractPslPuuid(pslEntries);
+        var hasSession = hasLegacySession || hasPslSession;
 
         return new RiotSessionInfo(hasSession, puuid, FindRegion(entries));
+    }
+
+    private static bool IsPslAuthorizationEntry(Entry entry) =>
+        (entry.ParentPath == PslAuthorizationParent && entry.Key == "riot-client")
+        || entry.ParentPath == PslRiotClientPath
+        || entry.ParentPath.StartsWith(PslRiotClientPath + "/", StringComparison.Ordinal);
+
+    private static string? ExtractPslPuuid(List<Entry> pslEntries)
+    {
+        foreach (var entry in pslEntries)
+        {
+            if (entry.Key is "sub" or "puuid" or "subject" && Guid.TryParse(entry.Value, out _))
+                return entry.Value;
+        }
+
+        foreach (var entry in pslEntries)
+        {
+            if (TryExtractJwtSub(entry.Value) is { } jwtSub)
+                return jwtSub;
+        }
+
+        return null;
+    }
+
+    private static string? TryExtractJwtSub(string token)
+    {
+        var firstDot = token.IndexOf('.');
+        if (firstDot <= 0)
+            return null;
+
+        var secondDot = token.IndexOf('.', firstDot + 1);
+        if (secondDot <= firstDot + 1 || token.IndexOf('.', secondDot + 1) >= 0)
+            return null;
+
+        try
+        {
+            var payloadSegment = token[(firstDot + 1)..secondDot]
+                .Replace('-', '+')
+                .Replace('_', '/');
+            var padding = (4 - (payloadSegment.Length % 4)) % 4;
+            if (padding > 0)
+                payloadSegment += new string('=', padding);
+
+            var bytes = Convert.FromBase64String(payloadSegment);
+            using var doc = JsonDocument.Parse(bytes);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("sub", out var sub)
+                && sub.ValueKind == JsonValueKind.String
+                && sub.GetString() is { Length: > 0 } subValue
+                && Guid.TryParse(subValue, out _))
+            {
+                return subValue;
+            }
+        }
+        catch
+        {
+            // Opaque or encrypted token; not a plaintext JWT.
+        }
+
+        return null;
     }
 
     private static string? FindRegion(List<Entry> entries) =>
@@ -49,7 +120,7 @@ public static class RiotYamlSessionParser
         var parents = new List<(int Indent, string Key)>();
         var item = 0;
 
-        foreach (var rawLine in yaml.TrimStart('﻿').Split('\n'))
+        foreach (var rawLine in yaml.TrimStart('\uFEFF').Split('\n'))
         {
             var line = rawLine.TrimEnd();
             var content = line.TrimStart();

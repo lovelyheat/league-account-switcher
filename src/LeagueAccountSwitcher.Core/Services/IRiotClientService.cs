@@ -17,6 +17,7 @@ public interface IRiotClientService
     Task<byte[]> CaptureCurrentSessionBytesAsync(CancellationToken ct = default);
     Task<string?> TryReadActiveSessionPuuidAsync(CancellationToken ct = default);
     Task<string?> TryReadActiveSessionRegionAsync(CancellationToken ct = default);
+    Task<RiotClientLiveAccount?> TryReadLiveRiotClientAccountAsync(CancellationToken ct = default);
 
     Task SwitchToAccountAsync(
         AccountRecord targetAccount,

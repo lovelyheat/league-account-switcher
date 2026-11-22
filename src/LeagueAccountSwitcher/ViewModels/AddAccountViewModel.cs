@@ -65,9 +65,28 @@ public sealed partial class AddAccountViewModel(
         (_live, _detectedPuuid, HasSession) = (null, null, false);
         ResetLoginConfirmations();
 
+        RiotClientLiveAccount? rcAccount = null;
+        try { rcAccount = await riot.TryReadLiveRiotClientAccountAsync(); }
+        catch (Exception) { }
+
         if (!await Task.Run(riot.HasActiveRiotSession))
         {
-            Show("No saved Riot sign-in found. Sign in to Riot Client with \"Stay signed in\" checked, or choose Sign In to New Account.", InfoBarSeverity.Warning);
+            if (rcAccount is not null)
+            {
+                if (!rcAccount.HasOfflineAccess)
+                {
+                    Show("You're signed in to Riot Client, but \"Stay signed in\" wasn't checked. Sign out, sign back in with \"Stay signed in\" checked, then click Check again.", InfoBarSeverity.Warning);
+                }
+                else
+                {
+                    Show("Riot Client hasn't saved the sign-in to disk yet. Click Play / open League of Legends in Riot Client (with \"Stay signed in\" checked), then click Check again.", InfoBarSeverity.Warning);
+                }
+            }
+            else
+            {
+                Show("No saved Riot sign-in found. Sign in to Riot Client with \"Stay signed in\" checked, or choose Sign In to New Account.", InfoBarSeverity.Warning);
+            }
+
             return;
         }
 
@@ -91,20 +110,28 @@ public sealed partial class AddAccountViewModel(
             _live = live;
         }
 
-        var existing = accounts.FindByPuuid(_detectedPuuid ?? _live?.Puuid);
+        var matchingRc = rcAccount is not null && (string.IsNullOrEmpty(_detectedPuuid)
+            || string.Equals(rcAccount.Puuid, _detectedPuuid, StringComparison.OrdinalIgnoreCase))
+            ? rcAccount
+            : null;
+
+        var existing = accounts.FindByPuuid(_detectedPuuid ?? _live?.Puuid ?? matchingRc?.Puuid);
         // Never silently adopt the machine's global RiotClientSettings region in Sign-In mode; only offer as an editable hint in Capture mode.
         var regionHint = includeRegionHint ? await riot.TryReadActiveSessionRegionAsync() : null;
 
         Details = new AccountDetailsViewModel(new AccountRecord
         {
             Alias = existing?.Alias,
-            GameName = NonEmpty(_live?.GameName) ?? NonEmpty(existing?.GameName) ?? string.Empty,
-            TagLine = NonEmpty(_live?.TagLine) ?? NonEmpty(existing?.TagLine) ?? string.Empty,
+            GameName = NonEmpty(_live?.GameName) ?? NonEmpty(matchingRc?.GameName) ?? NonEmpty(existing?.GameName) ?? string.Empty,
+            TagLine = NonEmpty(_live?.TagLine) ?? NonEmpty(matchingRc?.TagLine) ?? NonEmpty(existing?.TagLine) ?? string.Empty,
             Region = Helpers.Regions.Known(_live?.Region)
+                ?? Helpers.Regions.Known(matchingRc?.Region)
                 ?? Helpers.Regions.Known(existing?.Region)
                 ?? Helpers.Regions.Known(regionHint)
                 ?? "Unknown",
-            SummonerLevel = _live?.SummonerLevel is > 0 ? _live.SummonerLevel : existing?.SummonerLevel,
+            SummonerLevel = _live?.SummonerLevel is > 0 ? _live.SummonerLevel
+                : matchingRc?.SummonerLevel is > 0 ? matchingRc.SummonerLevel
+                : existing?.SummonerLevel,
             RankedSolo = _live?.RankedSolo ?? existing?.RankedSolo ?? RankedSoloInfo.Unranked,
             HasRankData = _live?.RankedSolo is not null || (existing?.HasRankData ?? false),
         });
@@ -114,6 +141,8 @@ public sealed partial class AddAccountViewModel(
             Show($"{existing.DisplayName} is already saved. Saving updates its session and details.");
         else if (_live is not null)
             Show($"Found {_live.GameName}#{_live.TagLine} in League Client.", InfoBarSeverity.Success);
+        else if (matchingRc is not null && !string.IsNullOrWhiteSpace(matchingRc.GameName))
+            Show($"Found {matchingRc.GameName}#{matchingRc.TagLine} in Riot Client. Solo/Duo rank will sync when League opens.", InfoBarSeverity.Success);
         else
             Show("Session found. Level and rank fill in automatically the next time League Client opens.", InfoBarSeverity.Success);
     }
