@@ -68,8 +68,8 @@ Instead of storing plaintext credentials or simulating fragile keyboard input in
 ## Quick Start
 
 1. **Sign In**: Open Riot Client and sign in to your account with **"Stay signed in"** checked.
-2. **Capture Current Session**: Launch **League Account Switcher** and click **Add Account → Save Current Sign-In** (if League Client is open, your Riot ID, Region, Level, and Solo/Duo Rank are filled in automatically).
-3. **Add Another Account**: Click **Add Account → Sign In to Another Account** — the app safely backs up your current session, opens a clean Riot Client sign-in prompt, and saves the new account once you log in.
+2. **Capture Current Session**: Launch **League Account Switcher** and click **Add Account → Capture Current Session** (if Riot Client or League Client is open, your Riot ID, Region, Level, and Solo/Duo Rank fill in automatically).
+3. **Add Another Account**: Click **Add Account → Sign In to New Account** — the app safely backs up your current session, opens a clean Riot Client sign-in prompt, and saves the new account once you log in.
 4. **Switch in One Click**: Click **Switch** on any account card (or right-click the **System Tray** lotus icon) to swap accounts and launch directly into League of Legends.
 
 ---
