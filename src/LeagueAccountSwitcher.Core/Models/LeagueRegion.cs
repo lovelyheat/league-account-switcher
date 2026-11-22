@@ -57,6 +57,7 @@ public static class LeagueRegion
             "TW" or "TW2" => "TW",
             "VN" or "VN2" => "VN",
             "PBE" or "PBE1" => "PBE",
+            "UNKNOWN" => "Unknown",
             _ => cleaned
         };
     }

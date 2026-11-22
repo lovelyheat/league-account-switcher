@@ -801,7 +801,7 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
         string[] expected =
         [
             "League of Legends", "LeagueClient", "LeagueClientUx", "LeagueClientUxRender",
-            "RiotClientCrashHandler", "RiotClientServices", "RiotClientUx", "RiotClientUxRender",
+            "Riot Client", "RiotClientCrashHandler", "RiotClientServices", "RiotClientUx", "RiotClientUxRender",
         ];
         string[] untouchable = ["vgc", "vgtray", "VALORANT-Win64-Shipping", "explorer"];
         _processes.Running.UnionWith(expected.Concat(untouchable));

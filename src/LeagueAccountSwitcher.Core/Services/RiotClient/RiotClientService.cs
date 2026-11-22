@@ -20,6 +20,7 @@ public sealed class RiotClientService : IRiotClientService
         "League of Legends",
         "RiotClientUxRender",
         "RiotClientUx",
+        "Riot Client",
         "RiotClientServices",
         "RiotClientCrashHandler",
     ];
@@ -55,7 +56,9 @@ public sealed class RiotClientService : IRiotClientService
         _environment.Processes.IsRunning("LeagueClient") || _environment.Processes.IsRunning("LeagueClientUx");
 
     public bool IsRiotClientRunning() =>
-        _environment.Processes.IsRunning("RiotClientServices") || _environment.Processes.IsRunning("RiotClientUx");
+        _environment.Processes.IsRunning("RiotClientServices")
+        || _environment.Processes.IsRunning("RiotClientUx")
+        || _environment.Processes.IsRunning("Riot Client");
 
     public async Task<byte[]> CaptureCurrentSessionBytesAsync(CancellationToken ct = default)
     {

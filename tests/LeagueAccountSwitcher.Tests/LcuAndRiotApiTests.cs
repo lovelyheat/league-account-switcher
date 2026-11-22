@@ -233,6 +233,8 @@ public sealed class RankAndRegionModelTests
     [InlineData("la2", "LAS")]
     [InlineData("kr", "KR")]
     [InlineData("xyz", "XYZ")]
+    [InlineData("Unknown", "Unknown")]
+    [InlineData("unknown", "Unknown")]
     [InlineData("", "Unknown")]
     [InlineData(null, "Unknown")]
     public void Region_is_normalized(string? raw, string expected)
