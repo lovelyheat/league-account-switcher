@@ -26,9 +26,9 @@ public static class RiotYamlSessionParser
 
         var puuid = cookies.FirstOrDefault(c => c.Name == "sub").Value;
 
-        // `tdid` only identifies the device and outlives sign-out. Counting it as a session
-        // would let a signed-out file replace an account's good snapshot.
-        var hasSession = puuid is not null || cookies.Any(c => c.Name == "ssid");
+        // `tdid` only identifies the device and outlives sign-out, and `sub` without `ssid`
+        // cannot authenticate Riot Client. Require a non-empty `ssid` cookie to count as signed in.
+        var hasSession = cookies.Any(c => c.Name == "ssid");
 
         return new RiotSessionInfo(hasSession, puuid, FindRegion(entries));
     }

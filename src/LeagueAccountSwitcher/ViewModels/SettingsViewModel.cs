@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using LeagueAccountSwitcher.Core.Models;
 using LeagueAccountSwitcher.Core.Services;
+using LeagueAccountSwitcher.Core.Services.RiotClient;
 using LeagueAccountSwitcher.Services;
 
 namespace LeagueAccountSwitcher.ViewModels;
@@ -54,15 +55,17 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             var riotPath = CleanPath(RiotPath);
             var leaguePath = CleanPath(LeaguePath);
-            foreach (var path in new[] { riotPath, leaguePath })
+
+            if (riotPath is not null && RiotClientPathDiscovery.ResolveRiotClientOverride(riotPath) is null)
             {
-                // Network paths are refused before probing: the probe alone sends Windows credentials to that host.
-                if (path is not null && (path.StartsWith(@"\\") || path.StartsWith("//")
-                    || !Path.IsPathFullyQualified(path) || !Path.Exists(path)))
-                {
-                    Error = $"Enter an existing path on a local drive: {path}";
-                    return false;
-                }
+                Error = "Riot Client override must point to RiotClientServices.exe or the folder containing it on a local drive.";
+                return false;
+            }
+
+            if (leaguePath is not null && RiotClientPathDiscovery.ResolveLeagueInstallOverride(leaguePath) is null)
+            {
+                Error = "League Client override must point to LeagueClient.exe or the League of Legends folder containing it on a local drive.";
+                return false;
             }
 
             var key = ApiKey.Trim();

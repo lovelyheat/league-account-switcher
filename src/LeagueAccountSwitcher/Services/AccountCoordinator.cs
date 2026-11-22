@@ -10,7 +10,10 @@ namespace LeagueAccountSwitcher.Services;
 /// </summary>
 public sealed class AccountCoordinator(IAccountStore store, IRiotClientService riot)
 {
+    private static readonly TimeSpan SyncTimestampSaveInterval = TimeSpan.FromMinutes(2);
+
     private readonly SemaphoreSlim _saveGate = new(1, 1);
+    private readonly Dictionary<string, DateTimeOffset> _lastPersistedSync = [];
     private List<AccountRecord> _accounts = [];
 
     public event EventHandler? Changed;
@@ -31,6 +34,8 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
         {
             account.RankedSolo ??= RankedSoloInfo.Unranked;
             account.HasSavedSession = store.HasSessionSnapshot(account.Id);
+            if (account.LastSyncedAt is not null || account.RankedSolo.IsRanked || account.RankedSolo.TotalGames > 0)
+                account.HasRankData = true;
         }
 
         (Settings, _accounts) = (settings, accounts);
@@ -44,15 +49,19 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
     /// <summary>The saved account that owns the live session file, or null if that can't be established.</summary>
     public async Task<AccountRecord?> ResolveSessionOwnerAsync()
     {
-        if (!riot.HasActiveRiotSession())
+        if (!await Task.Run(riot.HasActiveRiotSession))
             return null;
 
         var puuid = await riot.TryReadActiveSessionPuuidAsync();
-        return string.IsNullOrEmpty(puuid) ? Active : FindByPuuid(puuid);
+        if (!string.IsNullOrEmpty(puuid))
+            return FindByPuuid(puuid);
+
+        // Only fall back to the active pointer if that account itself has no known client PUUID.
+        return Active is { } active && !Guid.TryParse(active.Puuid, out _) ? active : null;
     }
 
     public async Task<bool> HasUnsavedSessionAsync() =>
-        riot.HasActiveRiotSession() && await ResolveSessionOwnerAsync() is null;
+        await Task.Run(riot.HasActiveRiotSession) && await ResolveSessionOwnerAsync() is null;
 
     /// <summary>Follows sign-ins made directly in Riot Client.</summary>
     public async Task FollowLiveSessionAsync()
@@ -65,18 +74,35 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
             await SetActiveAsync(FindByPuuid(puuid));
     }
 
-    public async Task SwitchAsync(AccountRecord target, IProgress<string>? progress)
+    public async Task SwitchAsync(
+        AccountRecord target,
+        IProgress<string>? progress,
+        bool allowCloseRunningMatch = false,
+        bool allowDiscardUnsavedSession = false)
     {
         if (!store.HasSessionSnapshot(target.Id))
             throw new InvalidOperationException("No saved session for this account. Sign in to it, then choose Re-capture Current Session.");
 
         await ReplaceSessionAsync(currentId => riot.SwitchToAccountAsync(
-            target, currentId, Settings.LaunchTarget, Settings.RiotClientPathOverride, progress), target);
+            target,
+            currentId,
+            Settings.LaunchTarget,
+            Settings.RiotClientPathOverride,
+            progress,
+            allowCloseRunningMatch: allowCloseRunningMatch,
+            allowDiscardUnsavedSession: allowDiscardUnsavedSession), target);
     }
 
-    public Task PrepareFreshLoginAsync(IProgress<string>? progress) =>
+    public Task PrepareFreshLoginAsync(
+        IProgress<string>? progress,
+        bool allowCloseRunningMatch = false,
+        bool allowDiscardUnsavedSession = false) =>
         ReplaceSessionAsync(currentId => riot.PrepareFreshLoginAsync(
-            currentId, Settings.RiotClientPathOverride, progress), next: null);
+            currentId,
+            Settings.RiotClientPathOverride,
+            progress,
+            allowCloseRunningMatch: allowCloseRunningMatch,
+            allowDiscardUnsavedSession: allowDiscardUnsavedSession), next: null);
 
     private async Task ReplaceSessionAsync(Func<string?, Task> replace, AccountRecord? next)
     {
@@ -126,11 +152,23 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
         NotifyChanged();
     }
 
-    /// <summary>Saves the live session as a new account, or over the saved account it belongs to.</summary>
-    public async Task<AccountRecord> CaptureAsync(LcuSnapshot? live, Action<AccountRecord> applyDetails)
+    /// <summary>Saves the live session as a new account, or over the saved account it belongs to, using one atomic read.</summary>
+    public async Task<AccountRecord> CaptureAsync(LcuSnapshot? live, string? expectedPuuid, Action<AccountRecord> applyDetails)
     {
-        var bytes = await CaptureBytesAsync();
-        var puuid = await riot.TryReadActiveSessionPuuidAsync() ?? live?.Puuid;
+        var captured = await riot.CaptureCurrentSessionAsync();
+        var puuid = captured.Puuid ?? live?.Puuid;
+
+        if (!string.IsNullOrEmpty(expectedPuuid)
+            && !string.Equals(expectedPuuid, puuid, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("The signed-in Riot account changed before saving. Check the details and try again.");
+        }
+
+        // Only apply the LCU snapshot if it matches the exact captured session identity.
+        var matchingLive = live is not null && (string.IsNullOrEmpty(captured.Puuid)
+            || string.Equals(live.Puuid, captured.Puuid, StringComparison.OrdinalIgnoreCase))
+            ? live
+            : null;
 
         var entered = new AccountRecord();
         applyDetails(entered);
@@ -141,12 +179,12 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
         var isNew = account is null;
         account ??= new AccountRecord();
 
-        await store.SaveSessionSnapshotAsync(account.Id, bytes);
+        await store.SaveSessionSnapshotAsync(account.Id, captured.Bytes);
 
         if (isNew)
             _accounts.Add(account);
-        if (live is not null)
-            ApplyLive(account, live);
+        if (matchingLive is not null)
+            ApplyLive(account, matchingLive);
         applyDetails(account);
         if (!string.IsNullOrEmpty(puuid))
             account.Puuid = puuid;
@@ -157,31 +195,27 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
 
     public async Task RecaptureAsync(AccountRecord account)
     {
-        var bytes = await CaptureBytesAsync();
-        var puuid = await riot.TryReadActiveSessionPuuidAsync();
-        if (!string.IsNullOrEmpty(puuid))
+        var captured = await riot.CaptureCurrentSessionAsync();
+        var puuid = captured.Puuid;
+
+        var accountHasClientPuuid = Guid.TryParse(account.Puuid, out _);
+        if (accountHasClientPuuid)
+        {
+            if (string.IsNullOrEmpty(puuid) || !string.Equals(account.Puuid, puuid, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Riot Client is signed in to a different account (or identity could not be verified). Sign in to {account.DisplayName} first.");
+        }
+        else if (!string.IsNullOrEmpty(puuid))
         {
             var owner = FindByPuuid(puuid);
-            var differentPuuid = !string.IsNullOrEmpty(account.Puuid)
-                && !string.Equals(account.Puuid, puuid, StringComparison.OrdinalIgnoreCase);
-
-            if (differentPuuid || (owner is not null && owner != account))
-                throw new InvalidOperationException($"Riot Client is signed in to a different account. Sign in to {account.DisplayName} first.");
+            if (owner is not null && owner != account)
+                throw new InvalidOperationException($"Riot Client is signed in to {owner.DisplayName}. Sign in to {account.DisplayName} first.");
         }
 
-        await store.SaveSessionSnapshotAsync(account.Id, bytes);
+        await store.SaveSessionSnapshotAsync(account.Id, captured.Bytes);
         if (!string.IsNullOrEmpty(puuid))
             account.Puuid = puuid;
 
         await MarkCapturedAsync(account);
-    }
-
-    private async Task<byte[]> CaptureBytesAsync()
-    {
-        if (!riot.HasActiveRiotSession())
-            throw new InvalidOperationException("No saved Riot sign-in found. Sign in to Riot Client with \"Stay signed in\" checked.");
-
-        return await riot.CaptureCurrentSessionBytesAsync();
     }
 
     private async Task MarkCapturedAsync(AccountRecord account)
@@ -219,11 +253,17 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
                 account.Puuid = live.Puuid;
 
             updated = ApplyLive(account, live) || learnedPuuid;
-            if (updated)
+            var shouldPersistTimestamp = !_lastPersistedSync.TryGetValue(account.Id, out var lastSaved)
+                || (live.FetchedAt - lastSaved) >= SyncTimestampSaveInterval;
+
+            if (updated || shouldPersistTimestamp)
             {
                 await SaveAccountsAsync();
-                NotifyChanged();
+                _lastPersistedSync[account.Id] = live.FetchedAt;
             }
+
+            // Always notify so "Synced at" stays fresh even when stats haven't changed.
+            NotifyChanged();
         }
 
         if (!IsOperating)
@@ -237,16 +277,15 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
         // result.Puuid is deliberately ignored: Riot API PUUIDs are encrypted per key and never match the client's.
         ApplyStats(account, result.GameName, result.TagLine, result.SummonerLevel, result.ProfileIconId, result.RankedSolo, result.FetchedAt);
         await SaveAccountsAsync();
+        _lastPersistedSync[account.Id] = result.FetchedAt;
         NotifyChanged();
     }
 
     private static bool ApplyLive(AccountRecord account, LcuSnapshot live)
     {
         var region = Regions.Known(live.Region);
+        var changed = ApplyStats(account, live.GameName, live.TagLine, live.SummonerLevel, live.ProfileIconId, live.RankedSolo, live.FetchedAt);
 
-        var rank = HasKnownRank(live) ? live.RankedSolo : account.RankedSolo;
-
-        var changed = ApplyStats(account, live.GameName, live.TagLine, live.SummonerLevel, live.ProfileIconId, rank, live.FetchedAt);
         if (region is null || region == account.Region)
             return changed;
 
@@ -254,13 +293,9 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
         return true;
     }
 
-    /// <summary>A fetch during client start-up reports placeholders: no region, and Unranked in place of the real rank.</summary>
-    public static bool HasKnownRank(LcuSnapshot live) =>
-        live.RankedSolo.IsRanked || Regions.Known(live.Region) is not null;
-
-    private static bool ApplyStats(AccountRecord a, string name, string tag, int level, int icon, RankedSoloInfo rank, DateTimeOffset at)
+    private static bool ApplyStats(AccountRecord a, string name, string tag, int level, int icon, RankedSoloInfo? rank, DateTimeOffset at)
     {
-        var before = (a.GameName, a.TagLine, a.SummonerLevel, a.ProfileIconId, a.RankedSolo);
+        var before = (a.GameName, a.TagLine, a.SummonerLevel, a.ProfileIconId, a.RankedSolo, a.HasRankData);
 
         if (!string.IsNullOrWhiteSpace(name))
             (a.GameName, a.TagLine) = (name, tag);
@@ -268,16 +303,34 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
             a.SummonerLevel = level;
         if (icon >= 0)
             a.ProfileIconId = icon;
-        a.RankedSolo = rank;
+        if (rank is not null)
+        {
+            a.RankedSolo = rank;
+            a.HasRankData = true;
+        }
+
         a.LastSyncedAt = at;
 
-        return before != (a.GameName, a.TagLine, a.SummonerLevel, a.ProfileIconId, a.RankedSolo);
+        return before != (a.GameName, a.TagLine, a.SummonerLevel, a.ProfileIconId, a.RankedSolo, a.HasRankData);
     }
 
     public async Task EditAsync(AccountRecord account, Action<AccountRecord> edit)
     {
+        var snapshot = (account.Alias, account.GameName, account.TagLine, account.Region,
+            account.SummonerLevel, account.RankedSolo, account.HasRankData);
+
         edit(account);
-        await SaveAccountsAsync();
+        try
+        {
+            await SaveAccountsAsync();
+        }
+        catch
+        {
+            (account.Alias, account.GameName, account.TagLine, account.Region,
+                account.SummonerLevel, account.RankedSolo, account.HasRankData) = snapshot;
+            throw;
+        }
+
         NotifyChanged();
     }
 
@@ -304,14 +357,28 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
             await SaveSettingsAsync();
         }
 
+        _lastPersistedSync.Remove(account.Id);
         NotifyChanged();
         await store.DeleteSessionSnapshotAsync(account.Id);
     }
 
     public async Task UpdateSettingsAsync(Action<AppSettings> update)
     {
+        var snapshot = (Settings.RiotClientPathOverride, Settings.LeagueClientPathOverride,
+            Settings.LaunchTarget, Settings.Theme, Settings.AutoSyncWithLcu, Settings.ProtectedRiotApiKey);
+
         update(Settings);
-        await SaveSettingsAsync();
+        try
+        {
+            await SaveSettingsAsync();
+        }
+        catch
+        {
+            (Settings.RiotClientPathOverride, Settings.LeagueClientPathOverride,
+                Settings.LaunchTarget, Settings.Theme, Settings.AutoSyncWithLcu, Settings.ProtectedRiotApiKey) = snapshot;
+            throw;
+        }
+
         NotifyChanged();
     }
 

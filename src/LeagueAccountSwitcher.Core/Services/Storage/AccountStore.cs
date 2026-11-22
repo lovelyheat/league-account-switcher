@@ -6,6 +6,12 @@ using LeagueAccountSwitcher.Core.Models;
 
 namespace LeagueAccountSwitcher.Core.Services.Storage;
 
+public sealed class CorruptAccountStoreException(string message, string backupPath, Exception innerException)
+    : IOException(message, innerException)
+{
+    public string BackupPath { get; } = backupPath;
+}
+
 public sealed class AccountStore : IAccountStore
 {
     // Changing these bytes makes every saved session and secret unreadable.
@@ -44,7 +50,7 @@ public sealed class AccountStore : IAccountStore
 
     public async Task<IReadOnlyList<AccountRecord>> LoadAccountsAsync(CancellationToken ct = default)
     {
-        var accounts = await LoadJsonAsync<List<AccountRecord?>>(_accountsPath, ct).ConfigureAwait(false);
+        var accounts = await LoadJsonAsync<List<AccountRecord?>>(_accountsPath, throwOnCorrupt: true, ct).ConfigureAwait(false);
         return accounts?.OfType<AccountRecord>().ToList() ?? [];
     }
 
@@ -57,7 +63,7 @@ public sealed class AccountStore : IAccountStore
     }
 
     public async Task<AppSettings> LoadSettingsAsync(CancellationToken ct = default) =>
-        await LoadJsonAsync<AppSettings>(_settingsPath, ct).ConfigureAwait(false) ?? new AppSettings();
+        await LoadJsonAsync<AppSettings>(_settingsPath, throwOnCorrupt: false, ct).ConfigureAwait(false) ?? new AppSettings();
 
     public Task SaveSettingsAsync(AppSettings settings, CancellationToken ct = default)
     {
@@ -157,7 +163,7 @@ public sealed class AccountStore : IAccountStore
         }
     }
 
-    private async Task<T?> LoadJsonAsync<T>(string path, CancellationToken ct) where T : class
+    private async Task<T?> LoadJsonAsync<T>(string path, bool throwOnCorrupt, CancellationToken ct) where T : class
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -170,10 +176,22 @@ public sealed class AccountStore : IAccountStore
                 await using var stream = File.OpenRead(path);
                 return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, ct).ConfigureAwait(false);
             }
-            catch (JsonException)
+            catch (JsonException ex)
             {
-                // Callers save over what they loaded, so keep the damaged original recoverable.
-                File.Copy(path, path + ".corrupt", overwrite: true);
+                // Timestamped backup so repeated failures never overwrite an earlier recovery copy.
+                var backupPath = $"{path}.corrupt.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}";
+                while (File.Exists(backupPath))
+                    backupPath = $"{path}.corrupt.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}.{Guid.NewGuid():N}";
+
+                File.Copy(path, backupPath, overwrite: false);
+                if (throwOnCorrupt)
+                {
+                    throw new CorruptAccountStoreException(
+                        $"Saved data in {Path.GetFileName(path)} is corrupted. A backup was saved to {Path.GetFileName(backupPath)}.",
+                        backupPath,
+                        ex);
+                }
+
                 return null;
             }
         }

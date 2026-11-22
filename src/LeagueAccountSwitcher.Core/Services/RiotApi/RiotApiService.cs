@@ -76,7 +76,7 @@ public sealed class RiotApiService(HttpClient? httpClient = null) : IRiotApiServ
         var hasRiotId = !string.IsNullOrWhiteSpace(account.GameName) && !string.IsNullOrWhiteSpace(account.TagLine);
 
         // The API rejects the UUIDs that the League Client reports.
-        if (!string.IsNullOrWhiteSpace(account.Puuid) && !(hasRiotId && IsClientPuuid(account.Puuid)))
+        if (!string.IsNullOrWhiteSpace(account.Puuid) && !IsClientPuuid(account.Puuid))
         {
             try
             {

@@ -50,6 +50,33 @@ public static class RiotClientPathDiscovery
         NormalizePath(RiotYamlSessionParser.ReadEntries(productSettingsYaml)
             .FirstOrDefault(e => e.Key == "product_install_full_path").Value);
 
+    public static string? ResolveRiotClientOverride(string? overridePath)
+    {
+        if (NormalizePath(overridePath) is not { } custom)
+            return null;
+
+        var candidate = Path.GetFileName(custom).Equals(RiotClientExe, StringComparison.OrdinalIgnoreCase)
+            ? custom
+            : Path.Combine(custom, RiotClientExe);
+        return File.Exists(candidate) ? candidate : null;
+    }
+
+    public static string? ResolveLeagueInstallOverride(string? overridePath)
+    {
+        if (NormalizePath(overridePath) is not { } custom)
+            return null;
+
+        var candidateDir = custom.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFileName(custom).Equals(LeagueClientExe, StringComparison.OrdinalIgnoreCase)
+                ? Path.GetDirectoryName(custom)
+                : null
+            : custom;
+
+        return candidateDir is not null && File.Exists(Path.Combine(candidateDir, LeagueClientExe))
+            ? candidateDir
+            : null;
+    }
+
     public static string? FindRiotClient(string? overridePath, string programDataDirectory, IEnumerable<string> searchRoots)
     {
         var candidates = new List<string>();

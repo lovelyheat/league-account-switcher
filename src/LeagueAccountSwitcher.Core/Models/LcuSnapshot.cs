@@ -7,7 +7,7 @@ public sealed record LcuSnapshot(
     int SummonerLevel,
     int ProfileIconId,
     string Region,
-    RankedSoloInfo RankedSolo,
+    RankedSoloInfo? RankedSolo,
     DateTimeOffset FetchedAt);
 
 public sealed record AccountRefreshResult(
@@ -18,3 +18,8 @@ public sealed record AccountRefreshResult(
     int ProfileIconId,
     RankedSoloInfo RankedSolo,
     DateTimeOffset FetchedAt);
+
+public sealed record CapturedSession(
+    byte[] Bytes,
+    string? Puuid,
+    string? Region);

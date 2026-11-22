@@ -14,7 +14,8 @@ public sealed partial class AddAccountViewModel(
 {
     private LcuSnapshot? _live;
     private string? _detectedPuuid;
-    private bool _discardConfirmed;
+    private string? _confirmedDiscardPuuid;
+    private bool _matchCloseConfirmed;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsCaptureMode), nameof(PrimaryText), nameof(CanSubmit), nameof(ShowDetails))]
@@ -48,6 +49,7 @@ public sealed partial class AddAccountViewModel(
     partial void OnIsSignInModeChanged(bool value)
     {
         Message = string.Empty;
+        ResetLoginConfirmations();
 
         // Re-read only if this dialog changed the session, so typed details otherwise survive a tab change.
         if (!value && IsLoginOpen)
@@ -55,14 +57,15 @@ public sealed partial class AddAccountViewModel(
     }
 
     [RelayCommand]
-    private Task DetectAsync() => RunAsync(DetectCoreAsync);
+    private Task DetectAsync() => RunAsync(() => DetectCoreAsync(includeRegionHint: !IsSignInMode));
 
-    private async Task DetectCoreAsync()
+    private async Task DetectCoreAsync(bool includeRegionHint)
     {
         Show("Looking for a signed-in Riot session…");
         (_live, _detectedPuuid, HasSession) = (null, null, false);
+        ResetLoginConfirmations();
 
-        if (!riot.HasActiveRiotSession())
+        if (!await Task.Run(riot.HasActiveRiotSession))
         {
             Show("No saved Riot sign-in found. Sign in to Riot Client with \"Stay signed in\" checked, or choose Sign In to New Account.", InfoBarSeverity.Warning);
             return;
@@ -89,17 +92,21 @@ public sealed partial class AddAccountViewModel(
         }
 
         var existing = accounts.FindByPuuid(_detectedPuuid ?? _live?.Puuid);
-        var regionHint = await riot.TryReadActiveSessionRegionAsync();
+        // Never silently adopt the machine's global RiotClientSettings region in Sign-In mode; only offer as an editable hint in Capture mode.
+        var regionHint = includeRegionHint ? await riot.TryReadActiveSessionRegionAsync() : null;
 
         Details = new AccountDetailsViewModel(new AccountRecord
         {
             Alias = existing?.Alias,
-            GameName = _live?.GameName ?? existing?.GameName ?? string.Empty,
-            TagLine = _live?.TagLine ?? existing?.TagLine ?? string.Empty,
-            Region = Helpers.Regions.Known(_live?.Region) ?? Helpers.Regions.Known(existing?.Region) ?? regionHint ?? "Unknown",
-            SummonerLevel = _live?.SummonerLevel ?? existing?.SummonerLevel,
-            RankedSolo = (_live is not null && AccountCoordinator.HasKnownRank(_live) ? _live.RankedSolo : existing?.RankedSolo)
-                ?? RankedSoloInfo.Unranked,
+            GameName = NonEmpty(_live?.GameName) ?? NonEmpty(existing?.GameName) ?? string.Empty,
+            TagLine = NonEmpty(_live?.TagLine) ?? NonEmpty(existing?.TagLine) ?? string.Empty,
+            Region = Helpers.Regions.Known(_live?.Region)
+                ?? Helpers.Regions.Known(existing?.Region)
+                ?? Helpers.Regions.Known(regionHint)
+                ?? "Unknown",
+            SummonerLevel = _live?.SummonerLevel is > 0 ? _live.SummonerLevel : existing?.SummonerLevel,
+            RankedSolo = _live?.RankedSolo ?? existing?.RankedSolo ?? RankedSoloInfo.Unranked,
+            HasRankData = _live?.RankedSolo is not null || (existing?.HasRankData ?? false),
         });
         HasSession = true;
 
@@ -114,22 +121,43 @@ public sealed partial class AddAccountViewModel(
     [RelayCommand]
     private Task OpenLoginAsync() => RunAsync(async () =>
     {
-        if (!_discardConfirmed && await accounts.HasUnsavedSessionAsync())
+        var inMatch = await Task.Run(riot.IsMatchRunning);
+        if (inMatch && !_matchCloseConfirmed)
         {
-            _discardConfirmed = true;
-            OpenLoginText = "Continue Without Saving";
-            Show("The account signed in now isn't saved and would be lost. Capture it first, or continue without saving.", InfoBarSeverity.Warning);
+            _matchCloseConfirmed = true;
+            OpenLoginText = "Close Game and Open Login";
+            Show("A League of Legends match is running. Continuing closes the game and may incur a leaver penalty. Select again to confirm.", InfoBarSeverity.Warning);
             return;
         }
 
-        IsLoginOpen = false;
-        _discardConfirmed = false;
-        Show("Opening a clean Riot Client login…");
-        await accounts.PrepareFreshLoginAsync(new Progress<string>(text =>
+        var hasUnsaved = await accounts.HasUnsavedSessionAsync();
+        var allowDiscard = false;
+        if (hasUnsaved)
         {
-            if (IsBusy && !IsLoginOpen)
-                Show(text);
-        }));
+            var liveKey = await riot.TryReadActiveSessionPuuidAsync() ?? string.Empty;
+            if (!string.Equals(_confirmedDiscardPuuid, liveKey, StringComparison.OrdinalIgnoreCase))
+            {
+                _confirmedDiscardPuuid = liveKey;
+                OpenLoginText = inMatch ? "Close Game & Continue Without Saving" : "Continue Without Saving";
+                Show("The account signed in now isn't saved and would be lost. Capture it first, or select again to continue without saving.", InfoBarSeverity.Warning);
+                return;
+            }
+
+            allowDiscard = true;
+        }
+
+        var allowCloseMatch = inMatch && _matchCloseConfirmed;
+        IsLoginOpen = false;
+        ResetLoginConfirmations();
+        Show("Opening a clean Riot Client login…");
+        await accounts.PrepareFreshLoginAsync(
+            new Progress<string>(text =>
+            {
+                if (IsBusy && !IsLoginOpen)
+                    Show(text);
+            }),
+            allowCloseRunningMatch: allowCloseMatch,
+            allowDiscardUnsavedSession: allowDiscard);
 
         IsLoginOpen = true;
         OpenLoginText = "Open Clean Login Again";
@@ -145,7 +173,7 @@ public sealed partial class AddAccountViewModel(
         {
             if (IsSignInMode)
             {
-                await DetectCoreAsync();
+                await DetectCoreAsync(includeRegionHint: false);
                 if (!HasSession)
                 {
                     Show("Not signed in yet. Finish signing in to Riot Client with \"Stay signed in\" checked, then try again.", InfoBarSeverity.Warning);
@@ -157,16 +185,25 @@ public sealed partial class AddAccountViewModel(
             }
             else if (!string.Equals(await riot.TryReadActiveSessionPuuidAsync(), _detectedPuuid, StringComparison.OrdinalIgnoreCase))
             {
-                await DetectCoreAsync();
+                await DetectCoreAsync(includeRegionHint: true);
                 Show("The signed-in account changed. Check the details, then save again.", InfoBarSeverity.Warning);
                 return;
             }
 
-            SavedAccount = await accounts.CaptureAsync(_live, Details.ApplyTo);
+            SavedAccount = await accounts.CaptureAsync(_live, _detectedPuuid, Details.ApplyTo);
         });
 
         return SavedAccount is not null;
     }
+
+    private void ResetLoginConfirmations()
+    {
+        _confirmedDiscardPuuid = null;
+        _matchCloseConfirmed = false;
+        OpenLoginText = IsLoginOpen ? "Open Clean Login Again" : "Open Clean Login";
+    }
+
+    private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
     private async Task RunAsync(Func<Task> action)
     {

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Net;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LeagueAccountSwitcher.Core.Models;
@@ -99,6 +100,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public bool CanInteract => IsLoaded && !IsBusy;
     public bool CanRefreshApi => CanInteract && HasApiKey;
 
+    public void ShowWarning(string message) => Notify(message, InfoBarSeverity.Warning);
+
     partial void OnSearchTextChanged(string value) => ApplyView();
     partial void OnSelectedRegionChanged(string? value) => ApplyView();
     partial void OnSortIndexChanged(int value) => ApplyView();
@@ -172,7 +175,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             var (account, updated) = await _accounts.ApplySnapshotAsync(live);
             if (updated && !IsBusy && account is not null)
-                Notify($"Synced {account.RankedSolo.FormattedRank} from League Client", InfoBarSeverity.Success);
+            {
+                var summary = account.HasRankData ? account.RankedSolo.FormattedRank : account.DisplayName;
+                Notify($"Synced {summary} from League Client", InfoBarSeverity.Success);
+            }
         }
         catch (Exception ex)
         {
@@ -364,9 +370,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         var (account, _) = await _accounts.ApplySnapshotAsync(live);
         if (account is null)
+        {
             Notify($"{live.GameName}#{live.TagLine} isn't saved yet. Select Add Account to save it.", InfoBarSeverity.Warning);
-        else
+        }
+        else if (live.RankedSolo is not null)
+        {
             Notify($"Synced {account.RankedSolo.FormattedRank} from League Client", InfoBarSeverity.Success);
+        }
+        else
+        {
+            Notify($"Synced {account.DisplayName} from League Client (ranked stats unavailable yet)", InfoBarSeverity.Success);
+        }
     });
 
     [RelayCommand]
@@ -398,6 +412,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                     problem = $"no data for {account.DisplayName}; check the Riot ID, region and API key";
                 }
             }
+            catch (HttpRequestException ex) when (ex.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
+            {
+                problem = ex.Message;
+                break;
+            }
             catch (Exception ex)
             {
                 problem = $"{account.DisplayName}: {ex.Message}";
@@ -419,18 +438,29 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             var owner = await _accounts.ResolveSessionOwnerAsync();
             var running = await Task.Run(_riot.IsLeagueClientRunning);
-            var inMatch = await Task.Run(IsMatchRunning);
+            var inMatch = await Task.Run(_riot.IsMatchRunning);
+
+            var allowCloseMatch = false;
+            var allowDiscardUnsaved = false;
 
             launchOnly = owner == account && !running;
             if (!launchOnly)
             {
-                if (inMatch && !await _dialogs.ConfirmAsync("A match is running",
-                        "Continuing closes the game, and you may be penalized for leaving.", "Close game and continue"))
-                    return;
+                if (inMatch)
+                {
+                    if (!await _dialogs.ConfirmAsync("A match is running",
+                            "Continuing closes the game, and you may be penalized for leaving.", "Close game and continue"))
+                        return;
+                    allowCloseMatch = true;
+                }
 
-                if (owner is null && _riot.HasActiveRiotSession() && !await _dialogs.ConfirmAsync("Current sign-in isn't saved",
-                        "The account signed in now will be replaced and you'll need to sign in to it again. To keep it, cancel and use Add Account first.", "Switch anyway"))
-                    return;
+                if (owner is null && await Task.Run(_riot.HasActiveRiotSession))
+                {
+                    if (!await _dialogs.ConfirmAsync("Current sign-in isn't saved",
+                            "The account signed in now will be replaced and you'll need to sign in to it again. To keep it, cancel and use Add Account first.", "Switch anyway"))
+                        return;
+                    allowDiscardUnsaved = true;
+                }
 
                 if (owner == account && !inMatch && !await _dialogs.ConfirmAsync("Restart League?",
                         $"League is already running on {account.DisplayName}. This closes and relaunches it.", "Restart"))
@@ -446,26 +476,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             else
             {
                 Notify($"Switching to {account.RiotId}…");
-                await _accounts.SwitchAsync(account, new Progress<string>(text =>
-                {
-                    // Reports are posted, so a late one must not replace the result banner.
-                    if (_accounts.IsOperating)
-                        Notify(text);
-                }));
+                await _accounts.SwitchAsync(
+                    account,
+                    new Progress<string>(text =>
+                    {
+                        // Reports are posted, so a late one must not replace the result banner.
+                        if (_accounts.IsOperating)
+                            Notify(text);
+                    }),
+                    allowCloseRunningMatch: allowCloseMatch,
+                    allowDiscardUnsavedSession: allowDiscardUnsaved);
                 Notify($"Switched to {account.RiotId}", InfoBarSeverity.Success);
             }
         });
 
         await PollAsync();
-    }
-
-    private static bool IsMatchRunning()
-    {
-        var processes = Process.GetProcessesByName("League of Legends");
-        foreach (var process in processes)
-            process.Dispose();
-
-        return processes.Length > 0;
     }
 
     public async Task RecaptureAsync(AccountItemViewModel item)
@@ -485,7 +510,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public async Task EditAsync(AccountItemViewModel item)
     {
         var details = new AccountDetailsViewModel(item.Record);
-        await _dialogs.ShowAsync(new EditAccountDialog(details, () => _accounts.EditAsync(item.Record, details.ApplyTo)));
+        await _dialogs.ShowAsync(new EditAccountDialog(details, () => _accounts.EditAsync(item.Record, details.ApplyChangesTo)));
     }
 
     public async Task RemoveAsync(AccountItemViewModel item)

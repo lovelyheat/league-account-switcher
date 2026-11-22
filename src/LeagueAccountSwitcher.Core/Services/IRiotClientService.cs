@@ -11,7 +11,9 @@ public interface IRiotClientService
     bool HasActiveRiotSession();
     bool IsLeagueClientRunning();
     bool IsRiotClientRunning();
+    bool IsMatchRunning();
 
+    Task<CapturedSession> CaptureCurrentSessionAsync(CancellationToken ct = default);
     Task<byte[]> CaptureCurrentSessionBytesAsync(CancellationToken ct = default);
     Task<string?> TryReadActiveSessionPuuidAsync(CancellationToken ct = default);
     Task<string?> TryReadActiveSessionRegionAsync(CancellationToken ct = default);
@@ -22,7 +24,9 @@ public interface IRiotClientService
         LaunchTarget launchTarget,
         string? riotClientPathOverride = null,
         IProgress<string>? progress = null,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        bool allowCloseRunningMatch = false,
+        bool allowDiscardUnsavedSession = false);
 
     Task LaunchClientAsync(
         LaunchTarget launchTarget,
@@ -33,5 +37,7 @@ public interface IRiotClientService
         string? currentActiveAccountId,
         string? riotClientPathOverride = null,
         IProgress<string>? progress = null,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        bool allowCloseRunningMatch = false,
+        bool allowDiscardUnsavedSession = false);
 }

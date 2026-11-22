@@ -13,6 +13,7 @@ public sealed class AccountRecord
     public int? SummonerLevel { get; set; }
     public int? ProfileIconId { get; set; }
     public RankedSoloInfo RankedSolo { get; set; } = RankedSoloInfo.Unranked;
+    public bool HasRankData { get; set; }
     public bool HasSavedSession { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? LastSwitchedAt { get; set; }

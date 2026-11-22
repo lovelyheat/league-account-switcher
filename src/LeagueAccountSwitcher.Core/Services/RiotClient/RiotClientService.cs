@@ -50,7 +50,7 @@ public sealed class RiotClientService : IRiotClientService
     public string GetRiotPrivateSettingsPath() =>
         Path.Combine(_environment.LocalAppData, "Riot Games", "Riot Client", "Data", "RiotGamesPrivateSettings.yaml");
 
-    public bool HasActiveRiotSession() => ReadActiveSession().HasSession;
+    public bool HasActiveRiotSession() => ReadActiveSessionWithRetry().HasSession;
 
     public bool IsLeagueClientRunning() =>
         _environment.Processes.IsRunning("LeagueClient") || _environment.Processes.IsRunning("LeagueClientUx");
@@ -60,20 +60,37 @@ public sealed class RiotClientService : IRiotClientService
         || _environment.Processes.IsRunning("RiotClientUx")
         || _environment.Processes.IsRunning("Riot Client");
 
-    public async Task<byte[]> CaptureCurrentSessionBytesAsync(CancellationToken ct = default)
+    public bool IsMatchRunning() =>
+        _environment.Processes.IsRunning("League of Legends");
+
+    public async Task<CapturedSession> CaptureCurrentSessionAsync(CancellationToken ct = default)
     {
         var bytes = await ReadPrivateSettingsAsync(FileShare.ReadWrite | FileShare.Delete, ct).ConfigureAwait(false);
-        return bytes is not null && ParseSession(bytes).HasSession
-            ? bytes
-            : throw new InvalidOperationException(
-                "No signed-in Riot session was found. Sign in to Riot Client with \"Stay signed in\" checked, then try again.");
+        if (bytes is null)
+            throw NoSignedInSessionException();
+
+        var parsed = ParseSession(bytes);
+        if (!parsed.HasSession)
+            throw NoSignedInSessionException();
+
+        return new CapturedSession(bytes, parsed.Puuid, parsed.Region);
     }
 
-    public Task<string?> TryReadActiveSessionPuuidAsync(CancellationToken ct = default) =>
-        Task.Run(() => ReadActiveSession().Puuid, ct);
+    public async Task<byte[]> CaptureCurrentSessionBytesAsync(CancellationToken ct = default) =>
+        (await CaptureCurrentSessionAsync(ct).ConfigureAwait(false)).Bytes;
 
-    public Task<string?> TryReadActiveSessionRegionAsync(CancellationToken ct = default) =>
-        Task.Run(() => ReadActiveSession().Region ?? ReadClientSettingsRegion(), ct);
+    public async Task<string?> TryReadActiveSessionPuuidAsync(CancellationToken ct = default)
+    {
+        var bytes = await ReadPrivateSettingsAsync(FileShare.ReadWrite | FileShare.Delete, ct).ConfigureAwait(false);
+        return bytes is null ? null : ParseSession(bytes).Puuid;
+    }
+
+    public async Task<string?> TryReadActiveSessionRegionAsync(CancellationToken ct = default)
+    {
+        var bytes = await ReadPrivateSettingsAsync(FileShare.ReadWrite | FileShare.Delete, ct).ConfigureAwait(false);
+        var fromPrivate = bytes is null ? null : ParseSession(bytes).Region;
+        return fromPrivate ?? ReadClientSettingsRegion();
+    }
 
     public async Task SwitchToAccountAsync(
         AccountRecord targetAccount,
@@ -81,7 +98,9 @@ public sealed class RiotClientService : IRiotClientService
         LaunchTarget launchTarget,
         string? riotClientPathOverride = null,
         IProgress<string>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool allowCloseRunningMatch = false,
+        bool allowDiscardUnsavedSession = false)
     {
         ArgumentNullException.ThrowIfNull(targetAccount);
 
@@ -97,16 +116,25 @@ public sealed class RiotClientService : IRiotClientService
             }
 
             var clientPath = RequireRiotClientPath(riotClientPathOverride);
+            EnsureMatchCanClose(allowCloseRunningMatch);
 
             // Snapshot file names are case-insensitive on Windows, so the IDs are compared the same way.
             var outgoingId = string.Equals(currentActiveAccountId, targetAccount.Id, StringComparison.OrdinalIgnoreCase)
                 ? null
                 : currentActiveAccountId;
-            var liveSession = await CloseClientsPreservingSessionAsync(outgoingId, progress, ct).ConfigureAwait(false);
+            var liveSession = await CloseClientsPreservingSessionAsync(
+                outgoingId,
+                targetAccount.Id,
+                targetSession,
+                allowCloseRunningMatch,
+                allowDiscardUnsavedSession,
+                progress,
+                ct).ConfigureAwait(false);
 
             if (IsSameSignedInAccount(liveSession, targetSession))
             {
-                // The live file holds newer rotated tokens than the snapshot.
+                // The live file holds newer rotated tokens than the snapshot; also refresh the target backup.
+                await BackUpAsync(targetAccount.Id, liveSession, progress, ct).ConfigureAwait(false);
                 progress?.Report($"{targetAccount.DisplayName} is already signed in. Keeping the current session.");
             }
             else
@@ -147,13 +175,24 @@ public sealed class RiotClientService : IRiotClientService
         string? currentActiveAccountId,
         string? riotClientPathOverride = null,
         IProgress<string>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool allowCloseRunningMatch = false,
+        bool allowDiscardUnsavedSession = false)
     {
         await _switchGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             var clientPath = RequireRiotClientPath(riotClientPathOverride);
-            await CloseClientsPreservingSessionAsync(currentActiveAccountId, progress, ct).ConfigureAwait(false);
+            EnsureMatchCanClose(allowCloseRunningMatch);
+
+            await CloseClientsPreservingSessionAsync(
+                currentActiveAccountId,
+                targetAccountId: null,
+                targetSession: null,
+                allowCloseRunningMatch,
+                allowDiscardUnsavedSession,
+                progress,
+                ct).ConfigureAwait(false);
 
             progress?.Report("Clearing the active session for a new sign-in...");
             var settingsPath = GetRiotPrivateSettingsPath();
@@ -181,15 +220,24 @@ public sealed class RiotClientService : IRiotClientService
 
     private async Task<byte[]?> CloseClientsPreservingSessionAsync(
         string? outgoingId,
+        string? targetAccountId,
+        byte[]? targetSession,
+        bool allowCloseRunningMatch,
+        bool allowDiscardUnsavedSession,
         IProgress<string>? progress,
         CancellationToken ct)
     {
-        byte[]? beforeClose = null;
-        if (!string.IsNullOrWhiteSpace(outgoingId))
-        {
-            beforeClose = await ReadPrivateSettingsAsync(FileShare.ReadWrite | FileShare.Delete, ct).ConfigureAwait(false);
-            await BackUpAsync(outgoingId, beforeClose, progress, ct).ConfigureAwait(false);
-        }
+        var beforeClose = await ReadPrivateSettingsAsync(FileShare.ReadWrite | FileShare.Delete, ct).ConfigureAwait(false);
+        var beforeBackedUp = await PreserveOrCheckSessionAsync(
+            beforeClose,
+            outgoingId,
+            targetAccountId,
+            targetSession,
+            allowDiscardUnsavedSession,
+            progress,
+            ct).ConfigureAwait(false);
+
+        EnsureMatchCanClose(allowCloseRunningMatch);
 
         progress?.Report("Closing Riot and League clients...");
         await StopClientsAsync(ct).ConfigureAwait(false);
@@ -198,36 +246,111 @@ public sealed class RiotClientService : IRiotClientService
         // An exclusive open succeeds only once every other handle on the file is gone.
         var afterClose = await ReadPrivateSettingsAsync(FileShare.None, ct).ConfigureAwait(false);
 
-        // Riot can write rotated tokens while shutting down.
-        if (!string.IsNullOrWhiteSpace(outgoingId) && afterClose is not null &&
-            (beforeClose is null || !afterClose.AsSpan().SequenceEqual(beforeClose)))
+        if (afterClose is not null)
         {
-            await BackUpAsync(outgoingId, afterClose, progress, ct).ConfigureAwait(false);
+            var changed = beforeClose is null || !afterClose.AsSpan().SequenceEqual(beforeClose);
+            if (changed || !beforeBackedUp)
+            {
+                // Riot can write rotated tokens or finish signing in while shutting down.
+                await PreserveOrCheckSessionAsync(
+                    afterClose,
+                    outgoingId,
+                    targetAccountId,
+                    targetSession,
+                    allowDiscardUnsavedSession,
+                    progress,
+                    ct).ConfigureAwait(false);
+            }
         }
 
         return afterClose;
     }
 
-    private async Task BackUpAsync(string accountId, byte[]? session, IProgress<string>? progress, CancellationToken ct)
+    private async Task<bool> PreserveOrCheckSessionAsync(
+        byte[]? sessionBytes,
+        string? outgoingId,
+        string? targetAccountId,
+        byte[]? targetSession,
+        bool allowDiscardUnsavedSession,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
+        if (sessionBytes is null)
+            return false;
+
+        var live = ParseSession(sessionBytes);
+        if (!live.HasSession)
+            return false;
+
+        // If the live session already belongs to the target account being launched/restarted, keep it safe.
+        if (targetSession is not null && IsSameSignedInAccount(sessionBytes, targetSession))
+        {
+            if (!string.IsNullOrWhiteSpace(targetAccountId))
+                await BackUpAsync(targetAccountId, sessionBytes, progress, ct).ConfigureAwait(false);
+            return true;
+        }
+
+        // First try backing up to the explicitly specified outgoing account (if its identity matches).
+        if (!string.IsNullOrWhiteSpace(outgoingId) &&
+            await BackUpAsync(outgoingId, sessionBytes, progress, ct).ConfigureAwait(false))
+        {
+            return true;
+        }
+
+        // Otherwise, resolve the true owner by PUUID from saved accounts so rotated tokens are never lost.
+        if (live.Puuid is not null &&
+            await FindOwnerAccountIdByPuuidAsync(live.Puuid, ct).ConfigureAwait(false) is { } ownerId &&
+            !string.Equals(ownerId, targetAccountId, StringComparison.OrdinalIgnoreCase) &&
+            await BackUpAsync(ownerId, sessionBytes, progress, ct).ConfigureAwait(false))
+        {
+            return true;
+        }
+
+        if (!allowDiscardUnsavedSession)
+        {
+            throw new InvalidOperationException(
+                "The currently signed-in Riot account isn't saved. Capture it first, or confirm replacing it.");
+        }
+
+        return false;
+    }
+
+    private async Task<bool> BackUpAsync(string accountId, byte[]? session, IProgress<string>? progress, CancellationToken ct)
     {
         if (session is null)
-            return;
+            return false;
 
         var live = ParseSession(session);
         if (!live.HasSession)
-            return;
+            return false;
 
-        // The user may have signed in to someone else inside Riot Client since the last switch.
-        if (live.Puuid is not null &&
-            await GetExpectedPuuidAsync(accountId, ct).ConfigureAwait(false) is { } expected &&
-            !expected.Equals(live.Puuid, StringComparison.OrdinalIgnoreCase))
+        // Fail closed: never overwrite an account with a known PUUID using a different or unknown identity.
+        if (await GetExpectedPuuidAsync(accountId, ct).ConfigureAwait(false) is { } expected &&
+            (live.Puuid is null || !expected.Equals(live.Puuid, StringComparison.OrdinalIgnoreCase)))
         {
             progress?.Report("Riot Client is signed in to a different account, so the previous account's saved session was left unchanged.");
-            return;
+            return false;
         }
 
         progress?.Report("Saving the current account's session...");
         await _accountStore.SaveSessionSnapshotAsync(accountId, session, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    private async Task<string?> FindOwnerAccountIdByPuuidAsync(string puuid, CancellationToken ct)
+    {
+        try
+        {
+            var accounts = await _accountStore.LoadAccountsAsync(ct).ConfigureAwait(false);
+            return accounts.FirstOrDefault(a =>
+                !string.IsNullOrEmpty(a.Puuid) &&
+                Guid.TryParse(a.Puuid, out _) &&
+                a.Puuid.Equals(puuid, StringComparison.OrdinalIgnoreCase))?.Id;
+        }
+        catch (CorruptAccountStoreException)
+        {
+            return null;
+        }
     }
 
     private async Task<string?> GetExpectedPuuidAsync(string accountId, CancellationToken ct)
@@ -236,11 +359,27 @@ public sealed class RiotClientService : IRiotClientService
         if (saved is not null && ParseSession(saved).Puuid is { } savedPuuid)
             return savedPuuid;
 
-        var accounts = await _accountStore.LoadAccountsAsync(ct).ConfigureAwait(false);
-        var recorded = accounts.FirstOrDefault(a => a.Id == accountId)?.Puuid;
+        try
+        {
+            var accounts = await _accountStore.LoadAccountsAsync(ct).ConfigureAwait(false);
+            var recorded = accounts.FirstOrDefault(a => a.Id == accountId)?.Puuid;
 
-        // Riot API PUUIDs are encrypted per key and cannot be compared with the `sub` cookie, which is a GUID.
-        return Guid.TryParse(recorded, out _) ? recorded : null;
+            // Riot API PUUIDs are encrypted per key and cannot be compared with the `sub` cookie, which is a GUID.
+            return Guid.TryParse(recorded, out _) ? recorded : null;
+        }
+        catch (CorruptAccountStoreException)
+        {
+            return null;
+        }
+    }
+
+    private void EnsureMatchCanClose(bool allowCloseRunningMatch)
+    {
+        if (!allowCloseRunningMatch && IsMatchRunning())
+        {
+            throw new InvalidOperationException(
+                "A League of Legends match is currently running. Finish the match or confirm closing the game first.");
+        }
     }
 
     private async Task StopClientsAsync(CancellationToken ct)
@@ -294,6 +433,34 @@ public sealed class RiotClientService : IRiotClientService
             },
             ct);
 
+    private RiotSessionInfo ReadActiveSessionWithRetry()
+    {
+        var path = GetRiotPrivateSettingsPath();
+        var elapsed = Stopwatch.StartNew();
+        var delay = 50;
+        while (true)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return RiotYamlSessionParser.Parse(reader.ReadToEnd());
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return new RiotSessionInfo(false, null, null);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (elapsed.Elapsed >= _environment.Timeout)
+                    throw new IOException("Riot's session file is locked or not readable. Close Riot Client and try again.", ex);
+            }
+
+            Thread.Sleep(delay);
+            delay = Math.Min(delay * 2, 500);
+        }
+    }
+
     private async Task<T> RetryFileAsync<T>(Func<Task<T>> operation, CancellationToken ct)
     {
         var elapsed = Stopwatch.StartNew();
@@ -327,9 +494,6 @@ public sealed class RiotClientService : IRiotClientService
         _environment.Processes.Start(clientPath, arguments);
     }
 
-    private RiotSessionInfo ReadActiveSession() =>
-        RiotYamlSessionParser.Parse(RiotClientPathDiscovery.ReadTextOrNull(GetRiotPrivateSettingsPath()));
-
     private string? ReadClientSettingsRegion()
     {
         var path = Path.Combine(_environment.LocalAppData, "Riot Games", "Riot Client", "Config", "RiotClientSettings.yaml");
@@ -338,10 +502,13 @@ public sealed class RiotClientService : IRiotClientService
 
     private static bool IsSameSignedInAccount(byte[]? live, byte[] target) =>
         live is not null &&
-        ParseSession(live).Puuid is { } puuid &&
+        ParseSession(live) is { HasSession: true, Puuid: { } puuid } &&
         puuid.Equals(ParseSession(target).Puuid, StringComparison.OrdinalIgnoreCase);
 
     private static RiotSessionInfo ParseSession(byte[] bytes) => RiotYamlSessionParser.Parse(Encoding.UTF8.GetString(bytes));
+
+    private static InvalidOperationException NoSignedInSessionException() => new(
+        "No signed-in Riot session was found. Sign in to Riot Client with \"Stay signed in\" checked, then try again.");
 }
 
 // Internal seam: tests must not close the developer's real Riot Client or touch their real session.

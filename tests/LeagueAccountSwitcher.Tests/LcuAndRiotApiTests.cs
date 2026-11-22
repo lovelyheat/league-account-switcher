@@ -307,7 +307,7 @@ public sealed class LcuServiceTests : IDisposable
         Assert.NotNull(snapshot);
         Assert.Equal(("p", "Player", "EUW", 247, 29), (snapshot.Puuid, snapshot.GameName, snapshot.TagLine, snapshot.SummonerLevel, snapshot.ProfileIconId));
         Assert.Equal("EUW", snapshot.Region);
-        Assert.Equal("Diamond II · 64 LP", snapshot.RankedSolo.FormattedRank);
+        Assert.Equal("Diamond II · 64 LP", snapshot.RankedSolo?.FormattedRank);
         Assert.True(service.IsConnected);
     }
 
@@ -355,7 +355,7 @@ public sealed class LcuServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Failed_secondary_requests_still_return_the_summoner()
+    public async Task Failed_secondary_requests_still_return_the_summoner_with_unknown_rank()
     {
         _responses[RankedPath] = (500, "");
         _responses[RegionPath] = (503, "");
@@ -363,7 +363,7 @@ public sealed class LcuServiceTests : IDisposable
 
         var snapshot = await service.TryFetchCurrentAccountAsync(_install.Path);
 
-        Assert.Equal(("p", "Unknown", RankedSoloInfo.Unranked), (snapshot?.Puuid, snapshot?.Region, snapshot?.RankedSolo));
+        Assert.Equal(("p", "Unknown", (RankedSoloInfo?)null), (snapshot?.Puuid, snapshot?.Region, snapshot?.RankedSolo));
     }
 
     [Fact]
@@ -376,7 +376,7 @@ public sealed class LcuServiceTests : IDisposable
 
         var snapshot = await service.TryFetchCurrentAccountAsync(_install.Path);
 
-        Assert.Equal(("EUW", "DIAMOND"), (snapshot?.Region, snapshot?.RankedSolo.Tier));
+        Assert.Equal(("EUW", "DIAMOND"), (snapshot?.Region, snapshot?.RankedSolo?.Tier));
     }
 
     [Fact]
@@ -419,7 +419,23 @@ public sealed class LcuServiceTests : IDisposable
         Assert.False(synced.Task.IsCompleted);
 
         _responses[RankedPath] = (200, RankedJson);
-        Assert.Equal("DIAMOND", (await synced.Task.WaitAsync(TimeSpan.FromSeconds(15))).RankedSolo.Tier);
+        Assert.Equal("DIAMOND", (await synced.Task.WaitAsync(TimeSpan.FromSeconds(15))).RankedSolo?.Tier);
+    }
+
+    [Fact]
+    public async Task Monitoring_emits_confirmed_unranked_even_if_region_endpoint_fails()
+    {
+        _responses[RankedPath] = (200, """{"queueMap":{"RANKED_SOLO_5x5":{"tier":"NONE"}}}""");
+        _responses[RegionPath] = (503, "");
+        using var service = new LcuService();
+        var synced = new TaskCompletionSource<LcuSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.ActiveAccountSynced += (_, snapshot) => synced.TrySetResult(snapshot);
+
+        service.StartMonitoring(() => _install.Path, TimeSpan.FromMilliseconds(50));
+        var result = await synced.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.Equal(RankedSoloInfo.Unranked, result.RankedSolo);
+        Assert.Equal("Unknown", result.Region);
     }
 
     [Fact]
@@ -773,6 +789,7 @@ public sealed class RiotApiServiceTests
 
         Assert.Null(await Refresh(http, Account("Unknown")));
         Assert.Null(await Refresh(http, new AccountRecord { Region = "EUW" }));
+        Assert.Null(await Refresh(http, new AccountRecord { Region = "EUW", Puuid = Guid.NewGuid().ToString() }));
         Assert.Empty(http.Requests);
     }
 

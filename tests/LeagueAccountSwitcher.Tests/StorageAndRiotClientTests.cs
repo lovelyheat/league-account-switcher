@@ -129,15 +129,21 @@ public sealed class AccountStoreTests : TempDirectoryTest
     [InlineData("{ broken")]
     [InlineData("")]
     [InlineData("42")]
-    public async Task Corrupt_json_loads_as_defaults_and_keeps_a_copy(string content)
+    public async Task Corrupt_accounts_throws_and_keeps_timestamped_backups_while_settings_falls_back(string content)
     {
         CreateFile("accounts.json", content);
         CreateFile("settings.json", content);
 
-        Assert.Empty(await _store.LoadAccountsAsync());
+        var firstEx = await Assert.ThrowsAsync<CorruptAccountStoreException>(() => _store.LoadAccountsAsync());
+        var secondEx = await Assert.ThrowsAsync<CorruptAccountStoreException>(() => _store.LoadAccountsAsync());
+
+        Assert.NotEqual(firstEx.BackupPath, secondEx.BackupPath);
+        Assert.Equal(content, File.ReadAllText(firstEx.BackupPath));
+        Assert.Equal(content, File.ReadAllText(secondEx.BackupPath));
+
         Assert.Null((await _store.LoadSettingsAsync()).ActiveAccountId);
-        Assert.Equal(content, File.ReadAllText(Path.Combine(Root, "accounts.json.corrupt")));
-        Assert.Equal(content, File.ReadAllText(Path.Combine(Root, "settings.json.corrupt")));
+        var settingsBackup = Assert.Single(Directory.GetFiles(Root, "settings.json.corrupt.*"));
+        Assert.Equal(content, File.ReadAllText(settingsBackup));
     }
 
     [Fact]
@@ -414,6 +420,24 @@ public sealed class RiotClientPathDiscoveryTests : TempDirectoryTest
     }
 
     [Fact]
+    public void Override_resolvers_require_the_expected_executable()
+    {
+        var wrongExe = CreateFile(@"other\notepad.exe");
+        var riotExe = CreateFile(@"custom-riot\RiotClientServices.exe");
+        var leagueExe = CreateFile(@"custom-league\LeagueClient.exe");
+
+        Assert.Null(RiotClientPathDiscovery.ResolveRiotClientOverride(wrongExe));
+        Assert.Null(RiotClientPathDiscovery.ResolveRiotClientOverride(Path.GetDirectoryName(wrongExe)));
+        Assert.Equal(riotExe, RiotClientPathDiscovery.ResolveRiotClientOverride(riotExe));
+        Assert.Equal(riotExe, RiotClientPathDiscovery.ResolveRiotClientOverride(Path.GetDirectoryName(riotExe)));
+
+        Assert.Null(RiotClientPathDiscovery.ResolveLeagueInstallOverride(wrongExe));
+        Assert.Null(RiotClientPathDiscovery.ResolveLeagueInstallOverride(Path.GetDirectoryName(wrongExe)));
+        Assert.Equal(Path.GetDirectoryName(leagueExe), RiotClientPathDiscovery.ResolveLeagueInstallOverride(leagueExe));
+        Assert.Equal(Path.GetDirectoryName(leagueExe), RiotClientPathDiscovery.ResolveLeagueInstallOverride(Path.GetDirectoryName(leagueExe)));
+    }
+
+    [Fact]
     public void Default_search_covers_drives_c_to_f() =>
         Assert.Equal([@"C:\", @"D:\", @"E:\", @"F:\"], RiotClientPathDiscovery.DefaultSearchRoots);
 }
@@ -475,10 +499,10 @@ public sealed class RiotYamlSessionParserTests
 
     [Theory]
     [InlineData("ssid", true)]
-    [InlineData("sub", true)]
+    [InlineData("sub", false)]
     [InlineData("tdid", false)]
     [InlineData("clid", false)]
-    public void Only_ssid_or_sub_make_a_session(string cookie, bool expected)
+    public void Only_ssid_makes_a_session(string cookie, bool expected)
     {
         var yaml = $"""
             riot-login:
@@ -586,8 +610,17 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
 
     private Task SaveTargetAsync() => _store.SaveSessionSnapshotAsync("target", Session(TargetPuuid));
 
-    private Task SwitchAsync(string? currentId = null, LaunchTarget launch = LaunchTarget.LeagueOfLegends) =>
-        _service.SwitchToAccountAsync(_target, currentId, launch);
+    private Task SwitchAsync(
+        string? currentId = null,
+        LaunchTarget launch = LaunchTarget.LeagueOfLegends,
+        bool allowCloseRunningMatch = false,
+        bool allowDiscardUnsavedSession = false) =>
+        _service.SwitchToAccountAsync(
+            _target,
+            currentId,
+            launch,
+            allowCloseRunningMatch: allowCloseRunningMatch,
+            allowDiscardUnsavedSession: allowDiscardUnsavedSession);
 
     [Fact]
     public void Public_constructor_uses_the_real_local_app_data_path()
@@ -739,7 +772,7 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
         await _store.SaveSessionSnapshotAsync("outgoing", good);
         SetLiveSession(Session(StrangerPuuid));
 
-        await SwitchAsync("outgoing");
+        await SwitchAsync("outgoing", allowDiscardUnsavedSession: true);
 
         Assert.Equal(good, await _store.LoadSessionSnapshotAsync("outgoing"));
     }
@@ -751,9 +784,52 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
         await _store.SaveAccountsAsync([new AccountRecord { Id = "outgoing", Puuid = OutgoingPuuid }]);
         SetLiveSession(Session(StrangerPuuid));
 
-        await SwitchAsync("outgoing");
+        await SwitchAsync("outgoing", allowDiscardUnsavedSession: true);
 
         Assert.False(_store.HasSessionSnapshot("outgoing"));
+    }
+
+    [Fact]
+    public async Task Unknown_puuid_session_does_not_overwrite_account_with_known_puuid()
+    {
+        await SaveTargetAsync();
+        var good = Session(OutgoingPuuid);
+        await _store.SaveSessionSnapshotAsync("outgoing", good);
+        SetLiveSession("riot-login:\n    persist:\n        session:\n            cookies:\n            -   name: \"ssid\"\n                value: \"no-sub-token\"\n"u8.ToArray());
+
+        await SwitchAsync("outgoing", allowDiscardUnsavedSession: true);
+
+        Assert.Equal(good, await _store.LoadSessionSnapshotAsync("outgoing"));
+    }
+
+    [Fact]
+    public async Task Unsaved_live_session_aborts_switch_and_fresh_login_without_consent()
+    {
+        await SaveTargetAsync();
+        await _store.SaveSessionSnapshotAsync("outgoing", Session(OutgoingPuuid));
+        var stranger = Session(StrangerPuuid);
+        SetLiveSession(stranger);
+        _processes.Running.Add("RiotClientServices");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SwitchAsync(currentId: null));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SwitchAsync(currentId: "outgoing"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _service.PrepareFreshLoginAsync(null));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _service.PrepareFreshLoginAsync("outgoing"));
+
+        Assert.Empty(_processes.Calls);
+        Assert.Equal(stranger, File.ReadAllBytes(SettingsPath));
+    }
+
+    [Fact]
+    public async Task Running_match_aborts_switch_and_fresh_login_without_consent()
+    {
+        await SaveTargetAsync();
+        _processes.Running.Add("League of Legends");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SwitchAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _service.PrepareFreshLoginAsync(null));
+
+        Assert.Empty(_processes.Calls);
     }
 
     [Fact]
@@ -776,14 +852,14 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
         await SaveTargetAsync();
         SetLiveSession(Session(OutgoingPuuid));
 
-        await SwitchAsync(currentId);
+        await SwitchAsync(currentId, allowDiscardUnsavedSession: true);
 
         Assert.Equal(Session(TargetPuuid), await _store.LoadSessionSnapshotAsync("target"));
         Assert.Equal(Session(TargetPuuid), File.ReadAllBytes(SettingsPath));
     }
 
     [Fact]
-    public async Task Newer_live_tokens_of_the_target_are_not_rolled_back()
+    public async Task Newer_live_tokens_of_the_target_are_not_rolled_back_and_refresh_its_backup()
     {
         await SaveTargetAsync();
         var rotated = Session(TargetPuuid, "rotated");
@@ -792,6 +868,7 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
         await SwitchAsync("target");
 
         Assert.Equal(rotated, File.ReadAllBytes(SettingsPath));
+        Assert.Equal(rotated, await _store.LoadSessionSnapshotAsync("target"));
     }
 
     [Fact]
@@ -806,7 +883,7 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
         string[] untouchable = ["vgc", "vgtray", "VALORANT-Win64-Shipping", "explorer"];
         _processes.Running.UnionWith(expected.Concat(untouchable));
 
-        await SwitchAsync();
+        await SwitchAsync(allowCloseRunningMatch: true);
 
         Assert.Equal(expected.Order(), _processes.Killed.Order());
         Assert.Equal(expected.Order(), _processes.CloseRequested.Order());
@@ -851,7 +928,7 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
         Task switching;
         using (new FileStream(SettingsPath, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            switching = SwitchAsync();
+            switching = SwitchAsync(allowDiscardUnsavedSession: true);
             await Task.Delay(250);
             Assert.False(switching.IsCompleted);
         }
@@ -869,9 +946,32 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
 
         using var held = new FileStream(SettingsPath, FileMode.Open, FileAccess.Read, FileShare.Read);
         await Assert.ThrowsAsync<IOException>(
-            () => service.SwitchToAccountAsync(_target, null, LaunchTarget.LeagueOfLegends));
+            () => service.SwitchToAccountAsync(_target, null, LaunchTarget.LeagueOfLegends, allowDiscardUnsavedSession: true));
 
         Assert.Null(_processes.StartedPath);
+    }
+
+    [Fact]
+    public async Task Locked_session_file_throws_instead_of_reporting_signed_out()
+    {
+        SetLiveSession(Session(OutgoingPuuid));
+        var service = CreateService(TimeSpan.FromMilliseconds(150));
+
+        using var held = new FileStream(SettingsPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        Assert.Throws<IOException>(() => service.HasActiveRiotSession());
+        await Assert.ThrowsAsync<IOException>(() => service.TryReadActiveSessionPuuidAsync());
+    }
+
+    [Fact]
+    public async Task Atomic_capture_returns_bytes_and_parsed_identity_together()
+    {
+        var live = Session(OutgoingPuuid);
+        SetLiveSession(live);
+
+        var captured = await _service.CaptureCurrentSessionAsync();
+
+        Assert.Equal(live, captured.Bytes);
+        Assert.Equal(OutgoingPuuid, captured.Puuid);
     }
 
     [Fact]

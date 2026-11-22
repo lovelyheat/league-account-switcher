@@ -3,6 +3,7 @@ using LeagueAccountSwitcher.Services;
 using LeagueAccountSwitcher.ViewModels;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Windows.Graphics;
 
 namespace LeagueAccountSwitcher;
@@ -12,12 +13,14 @@ public sealed partial class MainWindow : Window
     // Effective pixels; AppWindow works in physical ones.
     private const int DefaultWidth = 820, DefaultHeight = 640, MinWidth = 640, MinHeight = 480;
 
+    private readonly AccountCoordinator _coordinator;
     private double _scale;
     private bool _initialized;
 
-    public MainWindow(MainViewModel viewModel, DialogService dialogs)
+    public MainWindow(MainViewModel viewModel, AccountCoordinator coordinator, DialogService dialogs)
     {
         ViewModel = viewModel;
+        _coordinator = coordinator;
         InitializeComponent();
 
         Title = "League Account Switcher";
@@ -29,6 +32,17 @@ public sealed partial class MainWindow : Window
         _scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96.0;
         SetMinimumSize();
         CenterAtDefaultSize();
+        ApplyTheme();
+
+        AppWindow.Closing += (_, args) =>
+        {
+            // Never abort mid-switch after Riot Client has closed and before the session is written and relaunched.
+            if (_coordinator.IsOperating)
+            {
+                args.Cancel = true;
+                ViewModel.ShowWarning("Wait for the account switch to finish before closing.");
+            }
+        };
 
         viewModel.PropertyChanged += (_, e) =>
         {

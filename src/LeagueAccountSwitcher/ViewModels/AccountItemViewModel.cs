@@ -64,12 +64,15 @@ public sealed partial class AccountItemViewModel : ObservableObject
         Region = Helpers.Regions.Known(Record.Region) ?? "—";
         Level = Record.SummonerLevel is > 0 and var level ? $"Lv. {level}" : "Lv. —";
 
+        var hasRank = Record.HasRankData || Record.LastSyncedAt is not null || Record.RankedSolo.IsRanked || Record.RankedSolo.TotalGames > 0;
         Tier = Record.RankedSolo.NormalizedTier;
-        Rank = Record.RankedSolo.FormattedRank;
+        Rank = hasRank ? Record.RankedSolo.FormattedRank : "Not synced";
         WinLoss = Record.RankedSolo.FormattedRecord;
         SyncedText = Record.LastSyncedAt is { } at
             ? $"Ranked Solo/Duo, synced {at.LocalDateTime:g}"
-            : "Ranked Solo/Duo, not synced yet";
+            : hasRank
+                ? "Ranked Solo/Duo (manually entered)"
+                : "Ranked Solo/Duo, not synced yet";
 
         _ = LoadAvatarAsync();
     }

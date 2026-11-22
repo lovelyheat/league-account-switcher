@@ -155,10 +155,10 @@ public sealed class LcuService(IRiotClientService? riotClientService = null) : I
                 summoner.SummonerLevel,
                 summoner.ProfileIconId,
                 region,
-                rank ?? RankedSoloInfo.Unranked,
+                rank,
                 DateTimeOffset.UtcNow);
 
-            return (snapshot, rank is not null && region != "Unknown");
+            return (snapshot, rank is not null);
         }
 
         SetConnected(false, ct);
