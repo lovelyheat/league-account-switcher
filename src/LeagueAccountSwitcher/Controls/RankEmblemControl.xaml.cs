@@ -38,10 +38,7 @@ public sealed partial class RankEmblemControl : UserControl
                 return;
             }
 
-            image = new BitmapImage(new Uri(path))
-            {
-                DecodePixelWidth = 128,
-            };
+            image = new BitmapImage(new Uri(path));
             Cache[fileName] = image;
         }
 
