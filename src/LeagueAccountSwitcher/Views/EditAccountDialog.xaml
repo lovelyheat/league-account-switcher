@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentDialog
+    x:Class="LeagueAccountSwitcher.Views.EditAccountDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:LeagueAccountSwitcher.Controls"
+    Title="Edit details"
+    CloseButtonText="Cancel"
+    PrimaryButtonClick="OnPrimary"
+    PrimaryButtonText="Save"
+    PrimaryButtonStyle="{StaticResource AccentButtonStyle}"
+    Style="{StaticResource DefaultContentDialogStyle}">
+
+    <StackPanel Width="460" Spacing="12">
+        <TextBlock
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            Text="League Client replaces everything except the nickname the next time it syncs."
+            TextWrapping="Wrap" />
+        <InfoBar x:Name="ErrorBar" IsClosable="False" Severity="Error" />
+        <controls:AccountDetailsEditor Details="{x:Bind Details}" />
+    </StackPanel>
+</ContentDialog>
