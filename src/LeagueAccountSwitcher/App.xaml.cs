@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using LeagueAccountSwitcher.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
@@ -97,30 +96,6 @@ public partial class App : Application
 
     private void OnInstanceActivated(object? sender, AppActivationArguments e)
     {
-        _window?.DispatcherQueue.TryEnqueue(() =>
-        {
-            if (_window is null)
-                return;
-
-            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(_window);
-            if (IsIconic(hwnd))
-                ShowWindow(hwnd, SwRestore);
-            SetForegroundWindow(hwnd);
-            _window.Activate();
-        });
+        _window?.DispatcherQueue.TryEnqueue(() => _window?.RestoreFromTray());
     }
-
-    private const int SwRestore = 9;
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsIconic(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetForegroundWindow(IntPtr hWnd);
 }

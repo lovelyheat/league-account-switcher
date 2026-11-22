@@ -22,15 +22,15 @@
         </Grid.RowDefinitions>
 
         <TitleBar x:Name="AppTitleBar" Title="League Account Switcher">
-            <!-- Not IconSource: its brush doesn't follow a theme change. -->
             <TitleBar.LeftHeader>
-                <FontIcon
-                    Margin="16,0,0,0"
+                <Image
+                    x:Name="TitleBarIcon"
+                    Width="18"
+                    Height="18"
+                    Margin="14,0,0,0"
                     AutomationProperties.AccessibilityView="Raw"
-                    FontSize="16"
-                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                    Glyph="&#xE748;"
-                    IsHitTestVisible="False" />
+                    IsHitTestVisible="False"
+                    Stretch="Uniform" />
             </TitleBar.LeftHeader>
         </TitleBar>
 

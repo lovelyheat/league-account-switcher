@@ -65,6 +65,10 @@
             Header="Auto-sync level, rank and region from League Client"
             IsOn="{x:Bind ViewModel.AutoSync, Mode=TwoWay}" />
 
+        <ToggleSwitch
+            Header="Keep running in system tray when closed"
+            IsOn="{x:Bind ViewModel.MinimizeToTray, Mode=TwoWay}" />
+
         <StackPanel Spacing="4">
             <PasswordBox
                 Header="Riot Developer API key (optional)"

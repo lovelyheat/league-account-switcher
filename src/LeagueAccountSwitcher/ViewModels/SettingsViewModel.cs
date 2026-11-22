@@ -20,6 +20,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private int _launchIndex;
     [ObservableProperty] private int _themeIndex;
     [ObservableProperty] private bool _autoSync;
+    [ObservableProperty] private bool _minimizeToTray;
     [ObservableProperty] private string _apiKey;
     [ObservableProperty] private string _error = string.Empty;
 
@@ -33,6 +34,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _launchIndex = (int)settings.LaunchTarget;
         _themeIndex = (int)settings.Theme;
         _autoSync = settings.AutoSyncWithLcu;
+        _minimizeToTray = settings.MinimizeToTrayOnClose;
         _originalKey = _apiKey = store.UnprotectSecret(settings.ProtectedRiotApiKey) ?? string.Empty;
     }
 
@@ -80,6 +82,7 @@ public sealed partial class SettingsViewModel : ObservableObject
                 settings.LaunchTarget = (LaunchTarget)LaunchIndex;
                 settings.Theme = (AppThemePreference)ThemeIndex;
                 settings.AutoSyncWithLcu = AutoSync;
+                settings.MinimizeToTrayOnClose = MinimizeToTray;
                 settings.ProtectedRiotApiKey = protectedKey;
             });
             return true;

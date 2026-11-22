@@ -429,6 +429,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Notify($"Refreshed {refreshed} of {targets.Count} ({problem})", InfoBarSeverity.Warning);
     });
 
+    public Task SwitchAccountAsync(AccountRecord account) =>
+        _items.TryGetValue(account, out var item) ? SwitchAsync(item) : Task.CompletedTask;
+
     public async Task SwitchAsync(AccountItemViewModel item)
     {
         var account = item.Record;

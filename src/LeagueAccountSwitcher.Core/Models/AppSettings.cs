@@ -20,6 +20,7 @@ public sealed class AppSettings
     public LaunchTarget LaunchTarget { get; set; } = LaunchTarget.LeagueOfLegends;
     public AppThemePreference Theme { get; set; } = AppThemePreference.System;
     public bool AutoSyncWithLcu { get; set; } = true;
+    public bool MinimizeToTrayOnClose { get; set; }
     public string? ActiveAccountId { get; set; }
     public string? ProtectedRiotApiKey { get; set; }
 }

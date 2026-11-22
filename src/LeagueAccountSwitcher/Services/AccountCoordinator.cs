@@ -437,7 +437,7 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
     public async Task UpdateSettingsAsync(Action<AppSettings> update)
     {
         var snapshot = (Settings.RiotClientPathOverride, Settings.LeagueClientPathOverride,
-            Settings.LaunchTarget, Settings.Theme, Settings.AutoSyncWithLcu, Settings.ProtectedRiotApiKey);
+            Settings.LaunchTarget, Settings.Theme, Settings.AutoSyncWithLcu, Settings.MinimizeToTrayOnClose, Settings.ProtectedRiotApiKey);
 
         update(Settings);
         try
@@ -447,7 +447,7 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
         catch
         {
             (Settings.RiotClientPathOverride, Settings.LeagueClientPathOverride,
-                Settings.LaunchTarget, Settings.Theme, Settings.AutoSyncWithLcu, Settings.ProtectedRiotApiKey) = snapshot;
+                Settings.LaunchTarget, Settings.Theme, Settings.AutoSyncWithLcu, Settings.MinimizeToTrayOnClose, Settings.ProtectedRiotApiKey) = snapshot;
             throw;
         }
 
