@@ -4,9 +4,6 @@ using Microsoft.UI.Dispatching;
 
 namespace LeagueAccountSwitcher.Services;
 
-/// <summary>
-/// Manages a native Win32 system tray icon using a dedicated message window (no WinUI WndProc subclassing).
-/// </summary>
 public sealed class TrayIconService : IDisposable
 {
     private const uint WmUser = 0x0400;
@@ -49,7 +46,6 @@ public sealed class TrayIconService : IDisposable
     private readonly Func<string?> _getActiveAccountId;
     private readonly Func<bool> _canSwitch;
 
-    // Keep delegate alive for the lifetime of the registered WNDCLASS.
     private readonly WndProcDelegate _wndProc;
     private readonly string _className;
     private readonly uint _taskbarCreatedMessage;

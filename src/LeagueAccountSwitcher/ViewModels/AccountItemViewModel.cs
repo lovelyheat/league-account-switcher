@@ -26,7 +26,6 @@ public sealed partial class AccountItemViewModel : ObservableObject
     [ObservableProperty] private string _rank = string.Empty;
     [ObservableProperty] private string _winLoss = string.Empty;
     [ObservableProperty] private string _syncedText = string.Empty;
-    // Empty, never null: x:Bind skips a function with a null argument, leaving a recycled card showing another account's icon.
     [ObservableProperty] private string _avatarPath = string.Empty;
 
     [ObservableProperty]

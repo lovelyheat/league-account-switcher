@@ -22,7 +22,6 @@ public sealed partial class AddAccountDialog : ContentDialog
     private async void OnPrimary(ContentDialog sender, ContentDialogButtonClickEventArgs args) =>
         await args.CloseOnSuccessAsync(ViewModel.SaveAsync);
 
-    // Esc or Cancel must not hide a session swap that is still running.
     private void OnClosing(ContentDialog sender, ContentDialogClosingEventArgs args) =>
         args.Cancel |= ViewModel.IsBusy;
 }

@@ -11,7 +11,6 @@ namespace LeagueAccountSwitcher;
 
 public sealed partial class MainWindow : Window
 {
-    // Effective pixels; AppWindow works in physical ones.
     private const int DefaultWidth = 820, DefaultHeight = 640, MinWidth = 640, MinHeight = 480;
     private const int SwRestore = 9;
 
@@ -60,7 +59,6 @@ public sealed partial class MainWindow : Window
 
         AppWindow.Closing += (_, args) =>
         {
-            // Never abort mid-switch after Riot Client has closed and before the session is written and relaunched.
             if (_coordinator.IsOperating)
             {
                 args.Cancel = true;
@@ -151,7 +149,6 @@ public sealed partial class MainWindow : Window
     {
         RootGrid.RequestedTheme = ViewModel.Theme;
 
-        // Caption buttons don't follow the content's theme.
         AppWindow.TitleBar.PreferredTheme = ViewModel.Theme switch
         {
             ElementTheme.Dark => TitleBarTheme.Dark,

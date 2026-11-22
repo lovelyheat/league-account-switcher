@@ -3,7 +3,6 @@ using LeagueAccountSwitcher.Core.Models;
 
 namespace LeagueAccountSwitcher.ViewModels;
 
-/// <summary>Editable account fields, shared by the add and edit dialogs.</summary>
 public sealed partial class AccountDetailsViewModel : ObservableObject
 {
     public static IReadOnlyList<string> Regions { get; } = ["Unknown", .. LeagueRegion.All.Select(r => r.DisplayCode), "PBE"];
@@ -63,7 +62,6 @@ public sealed partial class AccountDetailsViewModel : ObservableObject
             Division ??= "IV";
     }
 
-    /// <summary>Applies all fields (used when creating or capturing an account).</summary>
     public void ApplyTo(AccountRecord target)
     {
         var (name, tag) = ParseRiotId();
@@ -90,7 +88,6 @@ public sealed partial class AccountDetailsViewModel : ObservableObject
         }
     }
 
-    /// <summary>Applies only the specific fields modified by the user so concurrent LCU syncs aren't reverted.</summary>
     public void ApplyChangesTo(AccountRecord target)
     {
         if (!string.Equals(Alias, _initialAlias, StringComparison.Ordinal))
@@ -162,7 +159,6 @@ public sealed partial class AccountDetailsViewModel : ObservableObject
         var name = GameName.Trim();
         var tag = TagLine.Trim().TrimStart('#');
 
-        // A full "Name#Tag" pasted into the name box.
         if (name.IndexOf('#') is >= 0 and var hash)
             (name, tag) = (name[..hash].Trim(), name[(hash + 1)..].Trim());
 
@@ -191,6 +187,5 @@ public sealed partial class AccountDetailsViewModel : ObservableObject
     private static bool SameNumber(double a, double b) =>
         (double.IsNaN(a) && double.IsNaN(b)) || Math.Abs(a - b) < 0.0001;
 
-    // NumberBox reports an empty box as NaN.
     private static int ToCount(double value) => double.IsFinite(value) ? (int)Math.Clamp(value, 0, 99_999) : 0;
 }

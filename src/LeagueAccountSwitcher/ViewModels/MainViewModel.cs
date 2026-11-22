@@ -114,7 +114,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
-            // IsLoaded stays false: saving now would replace the unreadable file with an empty list.
             Notify($"Couldn't load saved accounts, so changes are disabled: {ex.Message}", InfoBarSeverity.Error);
             return;
         }
@@ -138,7 +137,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         var wanted = _accounts.Settings.AutoSyncWithLcu;
 
-        // Only on a change: restarting reports a disconnect. A new path is picked up by the provider.
         if (wanted && !_isMonitoring)
             _lcu.StartMonitoring(() => _accounts.Settings.LeagueClientPathOverride);
         else if (!wanted && _isMonitoring)
@@ -150,7 +148,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void SetConnected(bool connected)
     {
-        // A manual sync also reports a connection, and with auto-sync off nothing would report the disconnect.
         IsConnected = connected && _accounts.Settings.AutoSyncWithLcu;
         ConnectionText = IsConnected ? "League Client connected"
             : _accounts.Settings.AutoSyncWithLcu ? "Waiting for League Client"
@@ -208,7 +205,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
-            // Riot rewrites its files while running; the next tick retries.
             Debug.WriteLine(ex);
         }
         finally
@@ -248,7 +244,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ApplyView();
     }
 
-    // The pointer outlives a sign-out inside Riot Client, so it only counts while a session is present.
     private void UpdateLiveState(AccountItemViewModel item)
     {
         item.IsActive = _hasSession && item.Record.Id == _accounts.Settings.ActiveAccountId;
@@ -263,7 +258,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             .. _accounts.Accounts.Select(a => Helpers.Regions.Known(a.Region)).OfType<string>().Distinct().Order(),
         ];
 
-        // Move the selection off a region before it disappears, or the ComboBox goes blank.
         if (!wanted.Contains(SelectedRegion))
             SelectedRegion = AllRegions;
 
@@ -302,10 +296,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         CountText = ordered.Length == _items.Count ? total : $"{ordered.Length} of {total}";
     }
 
-    // Edits in place: clearing would drop scroll position, focus and ComboBox selection.
     private static void Reconcile<T>(ObservableCollection<T> current, IReadOnlyList<T> wanted)
     {
-        // Removals first, so the survivors don't Move: a moved item loses ComboBox selection.
         for (var i = current.Count - 1; i >= 0; i--)
         {
             if (!wanted.Contains(current[i]))
@@ -486,7 +478,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                     account,
                     new Progress<string>(text =>
                     {
-                        // Reports are posted, so a late one must not replace the result banner.
                         if (_accounts.IsOperating)
                             Notify(text);
                     }),

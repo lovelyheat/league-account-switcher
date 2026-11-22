@@ -51,7 +51,6 @@ public sealed partial class AddAccountViewModel(
         Message = string.Empty;
         ResetLoginConfirmations();
 
-        // Re-read only if this dialog changed the session, so typed details otherwise survive a tab change.
         if (!value && IsLoginOpen)
             DetectCommand.Execute(null);
     }
@@ -100,7 +99,6 @@ public sealed partial class AddAccountViewModel(
         }
         catch (Exception)
         {
-            // Pre-fill is optional; capturing only needs the session file.
             live = null;
         }
 
@@ -116,7 +114,6 @@ public sealed partial class AddAccountViewModel(
             : null;
 
         var existing = accounts.FindByPuuid(_detectedPuuid ?? _live?.Puuid ?? matchingRc?.Puuid);
-        // Never silently adopt the machine's global RiotClientSettings region in Sign-In mode; only offer as an editable hint in Capture mode.
         var regionHint = includeRegionHint ? await riot.TryReadActiveSessionRegionAsync() : null;
 
         Details = new AccountDetailsViewModel(new AccountRecord
