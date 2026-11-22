@@ -10,7 +10,6 @@ public sealed class DialogService
 
     public void Attach(FrameworkElement host) => _host = host;
 
-    /// <summary>WinUI throws on a second open dialog, so a concurrent request reports as cancelled.</summary>
     public async Task<ContentDialogResult> ShowAsync(ContentDialog dialog)
     {
         if (_isOpen || _host?.XamlRoot is not { } xamlRoot)
@@ -20,7 +19,6 @@ public sealed class DialogService
         try
         {
             dialog.XamlRoot = xamlRoot;
-            // Dialogs live in the popup layer and don't inherit the window's theme.
             dialog.RequestedTheme = _host.RequestedTheme;
             return await dialog.ShowAsync();
         }

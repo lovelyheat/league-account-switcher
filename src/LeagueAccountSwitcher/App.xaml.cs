@@ -21,7 +21,6 @@ public partial class App : Application
 
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
-        // Enforce single instance across ALL executable paths (e.g., Debug vs Release or copied folders) per Windows user session.
         Mutex mutex;
         bool createdNew;
         try
@@ -30,7 +29,6 @@ public partial class App : Application
         }
         catch (UnauthorizedAccessException)
         {
-            // Another instance (e.g., elevated) already owns the mutex.
             Exit();
             return;
         }
@@ -40,7 +38,6 @@ public partial class App : Application
             mutex.Dispose();
             try
             {
-                // Look up without registering so a loser can never steal the key from a simultaneously starting winner.
                 var existing = AppInstance.GetInstances()
                     .FirstOrDefault(i => i.Key == InstanceKey && !i.IsCurrent);
                 if (existing is not null)
@@ -48,7 +45,6 @@ public partial class App : Application
             }
             catch
             {
-                // Best-effort focus handoff when launched from a different executable path.
             }
 
             Exit();
@@ -72,7 +68,6 @@ public partial class App : Application
         var services = ServiceProviderFactory.Create();
         _window = services.GetRequiredService<MainWindow>();
 
-        // Disposes MainViewModel and ILcuService, which stops background monitoring.
         _window.Closed += (_, _) =>
         {
             if (_instance is not null)

@@ -94,6 +94,5 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
-    // Explorer's "Copy as path" adds quotes.
     private static string? CleanPath(string value) => value.Trim().Trim('"') is { Length: > 0 } path ? path : null;
 }
