@@ -12,9 +12,6 @@ using LeagueAccountSwitcher.Core.Models;
 
 namespace LeagueAccountSwitcher.Core.Services.Lcu;
 
-/// <summary>
-/// Reads the signed-in account from the local League Client. Events are raised on thread-pool threads.
-/// </summary>
 public sealed class LcuService(IRiotClientService? riotClientService = null) : ILcuService
 {
     private const string UxProcessName = "LeagueClientUx";
@@ -24,7 +21,6 @@ public sealed class LcuService(IRiotClientService? riotClientService = null) : I
     private readonly HttpClient _http = CreateHttpClient();
     private readonly object _gate = new();
 
-    // Last confirmed values per puuid, so a failed request never turns into "Unranked" or "Unknown".
     private readonly ConcurrentDictionary<string, RankedSoloInfo> _knownRanks = new();
     private readonly ConcurrentDictionary<string, string> _knownRegions = new();
 
@@ -39,7 +35,6 @@ public sealed class LcuService(IRiotClientService? riotClientService = null) : I
 
     public async Task<LcuSnapshot?> TryFetchCurrentAccountAsync(string? leaguePathOverride = null, CancellationToken ct = default)
     {
-        // File and WMI discovery block, and callers are usually on the UI thread.
         var (snapshot, _) = await Task.Run(() => FetchAsync(leaguePathOverride, ct), ct);
         return snapshot;
     }
@@ -52,7 +47,6 @@ public sealed class LcuService(IRiotClientService? riotClientService = null) : I
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
 
-            // Created here so that an invalid interval throws to the caller.
             var timer = new PeriodicTimer(pollInterval ?? DefaultPollInterval);
             CancelMonitor();
             _monitor = new CancellationTokenSource();
@@ -102,7 +96,6 @@ public sealed class LcuService(IRiotClientService? riotClientService = null) : I
                 {
                     var (snapshot, isComplete) = await FetchAsync(pathProvider(), ct);
 
-                    // While the client boots, placeholders must not be synced over saved rank and region.
                     if (snapshot is not null && isComplete && !ct.IsCancellationRequested)
                         ActiveAccountSynced?.Invoke(this, snapshot);
                 }
@@ -124,7 +117,6 @@ public sealed class LcuService(IRiotClientService? riotClientService = null) : I
         {
             var (status, body) = await GetAsync(connection, "/lol-summoner/v1/current-summoner", ct);
 
-            // No answer or a rejected token means a stale lockfile, so try the next source.
             if (status is null or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 continue;
 
@@ -191,7 +183,6 @@ public sealed class LcuService(IRiotClientService? riotClientService = null) : I
                 yield return fromLockfile;
         }
 
-        // Evaluated only when no lockfile connection answered.
         foreach (var fromProcess in QueryClientProcesses())
             yield return fromProcess;
     }
@@ -213,7 +204,6 @@ public sealed class LcuService(IRiotClientService? riotClientService = null) : I
     {
         try
         {
-            // The setting may point at LeagueClient.exe instead of its folder.
             var directory = File.Exists(path) ? Path.GetDirectoryName(path)! : path;
             var lockfile = Path.Combine(directory, "lockfile");
             if (!File.Exists(lockfile))
@@ -235,7 +225,6 @@ public sealed class LcuService(IRiotClientService? riotClientService = null) : I
         var connections = new List<LcuConnectionInfo>();
         try
         {
-            // WMI is costly, and this runs on every poll while League is closed.
             var processes = Process.GetProcessesByName(UxProcessName);
             foreach (var process in processes)
                 process.Dispose();
@@ -288,13 +277,11 @@ public sealed class LcuService(IRiotClientService? riotClientService = null) : I
         }
     }
 
-    // Riot's LCU certificate is self-signed, so only loopback requests may skip validation.
     internal static bool IsTrustedCertificate(Uri? requestUri, SslPolicyErrors errors) =>
         errors == SslPolicyErrors.None || requestUri?.Host is "127.0.0.1" or "localhost";
 
     private static HttpClient CreateHttpClient() => new(new HttpClientHandler
     {
-        // A system proxy or a redirect would carry the client's auth token off the machine.
         UseProxy = false,
         AllowAutoRedirect = false,
         ServerCertificateCustomValidationCallback = (request, _, _, errors) => IsTrustedCertificate(request.RequestUri, errors),

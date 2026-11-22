@@ -29,7 +29,6 @@ public static class RiotClientPathDiscovery
             return candidates
                 .Select(NormalizePath)
                 .OfType<string>()
-                // The result gets executed, so accept nothing but the Riot Client launcher.
                 .Where(p => Path.GetFileName(p).Equals(RiotClientExe, StringComparison.OrdinalIgnoreCase));
         });
 
@@ -116,7 +115,6 @@ public static class RiotClientPathDiscovery
     {
         try
         {
-            // Riot rewrites these files while running, so never block its writes.
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var reader = new StreamReader(stream);
             return reader.ReadToEnd();
@@ -152,7 +150,6 @@ public static class RiotClientPathDiscovery
     {
         var path = raw?.Trim().Trim('"').Replace('/', '\\');
 
-        // UNC paths are refused: probing one sends the user's Windows credentials to that host.
         if (string.IsNullOrEmpty(path) || path.Contains('\0') || path.StartsWith(@"\\", StringComparison.Ordinal) ||
             !Path.IsPathFullyQualified(path))
         {

@@ -14,12 +14,10 @@ public sealed class CorruptAccountStoreException(string message, string backupPa
 
 public sealed class AccountStore : IAccountStore
 {
-    // Changing these bytes makes every saved session and secret unreadable.
     private static readonly byte[] Entropy = "LeagueAccountSwitcher.SessionStore.v1"u8.ToArray();
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-    // An allowlist instead of character replacement, so two IDs can never map to the same snapshot.
     private static readonly Regex SafeAccountId = new(
         @"^(?!(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])\z)[A-Z0-9_-]{1,128}\z",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -58,7 +56,6 @@ public sealed class AccountStore : IAccountStore
     {
         ArgumentNullException.ThrowIfNull(accounts);
 
-        // Serialize before the first await so later edits to the caller's collection cannot race the write.
         return WriteLockedAsync(_accountsPath, JsonSerializer.SerializeToUtf8Bytes(accounts.ToList(), JsonOptions), ct);
     }
 
@@ -178,7 +175,6 @@ public sealed class AccountStore : IAccountStore
             }
             catch (JsonException ex)
             {
-                // Timestamped backup so repeated failures never overwrite an earlier recovery copy.
                 var backupPath = $"{path}.corrupt.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}";
                 while (File.Exists(backupPath))
                     backupPath = $"{path}.corrupt.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}.{Guid.NewGuid():N}";

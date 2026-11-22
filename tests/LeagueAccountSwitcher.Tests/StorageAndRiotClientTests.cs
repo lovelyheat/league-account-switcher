@@ -591,7 +591,7 @@ public sealed class RiotYamlSessionParserTests
     public void Psl_authorization_extracts_puuid_from_jwt_payload()
     {
         var payloadJson = $"{{\"sub\":\"{Puuid}\",\"iss\":\"https://auth.riotgames.com\"}}";
-        var payloadB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(payloadJson))
+        var payloadB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(payloadJson))
             .TrimEnd('=').Replace('+', '-').Replace('/', '_');
         var jwt = $"eyJhbGciOiJSUzI1NiJ9.{payloadB64}.signature";
 
@@ -1071,7 +1071,6 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
         await SaveTargetAsync();
         SetLiveSession(Session(StrangerPuuid));
 
-        // Confirmed for a different PUUID -> must refuse!
         await Assert.ThrowsAsync<InvalidOperationException>(() => _service.SwitchToAccountAsync(
             _target,
             null,
@@ -1079,7 +1078,6 @@ public sealed class RiotClientServiceTests : TempDirectoryTest
             allowDiscardUnsavedSession: true,
             confirmedDiscardPuuid: OutgoingPuuid));
 
-        // Confirmed for the exact live PUUID -> succeeds!
         await _service.SwitchToAccountAsync(
             _target,
             null,

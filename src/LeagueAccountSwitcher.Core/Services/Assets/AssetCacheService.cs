@@ -33,7 +33,6 @@ public sealed class AssetCacheService : IAssetCacheService
         Task<string?> task;
         lock (_versionLock)
         {
-            // A failed lookup is retried, otherwise starting offline would pin the fallback for the whole session.
             if (_versionTask is null || (_versionTask.IsCompleted && _versionTask.Result is null))
                 _versionTask = FetchLatestVersionAsync();
 
@@ -52,7 +51,6 @@ public sealed class AssetCacheService : IAssetCacheService
         if (File.Exists(path))
             return path;
 
-        // Callers share one download, so one caller cancelling must not cancel it for the others.
         var download = _downloads.GetOrAdd(id, key => new Lazy<Task<string?>>(() => DownloadIconAsync(key, path)));
         return await download.Value.WaitAsync(ct);
     }

@@ -808,7 +808,6 @@ public sealed class RiotApiServiceTests
         new RiotApiService(new HttpClient(http)).RefreshAccountAsync(account, Key);
 }
 
-// DispatchProxy needs a public, unsealed type. It answers one member and rejects all others.
 public class StubProxy : DispatchProxy
 {
     private string _member = "";
@@ -857,7 +856,6 @@ internal sealed class FakeHttpHandler(Func<HttpRequestMessage, Task<HttpResponse
     }
 }
 
-/// <summary>A minimal LCU: self-signed TLS on loopback with Basic auth.</summary>
 internal sealed class FakeLcuServer : IDisposable
 {
     private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
@@ -876,7 +874,6 @@ internal sealed class FakeLcuServer : IDisposable
         var request = new CertificateRequest("CN=rclient", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
 
-        // SChannel cannot serve TLS with the ephemeral key, so round-trip it through PFX.
         _certificate = new X509Certificate2(certificate.Export(X509ContentType.Pfx));
 
         _listener.Start();
@@ -936,7 +933,6 @@ internal sealed class FakeLcuServer : IDisposable
         }
         catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException)
         {
-            // The client went away when its test finished.
         }
     }
 }

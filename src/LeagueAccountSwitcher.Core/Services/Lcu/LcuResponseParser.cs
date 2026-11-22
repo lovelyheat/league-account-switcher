@@ -9,7 +9,6 @@ public static class LcuResponseParser
 {
     internal const string SoloQueue = "RANKED_SOLO_5x5";
 
-    /// <summary>Returns null unless the response carries a puuid.</summary>
     public static LcuSummoner? ParseSummoner(string? json)
     {
         if (ParseObject(json) is not { } root || GetString(root, "puuid") is not { } puuid)
@@ -23,10 +22,6 @@ public static class LcuResponseParser
             GetInt(root, "profileIconId"));
     }
 
-    /// <summary>
-    /// Returns null when the response is not a ranked-stats payload (rank unknown), and an unranked value when it is
-    /// one without a Solo/Duo rank.
-    /// </summary>
     public static RankedSoloInfo? ParseRankedSolo(string? json)
     {
         if (ParseObject(json) is not { } root)
@@ -49,13 +44,11 @@ public static class LcuResponseParser
         return hasMap || hasList ? RankedSoloInfo.Unranked : null;
     }
 
-    /// <summary>Returns the normalized region, or <c>Unknown</c>.</summary>
     public static string ParseRegion(string? json) =>
         LeagueRegion.Normalize(ParseObject(json) is { } root
             ? GetString(root, "region") ?? GetString(root, "webRegion")
             : null);
 
-    // League-V4 has the same queue shape, except that it calls the division "rank".
     internal static RankedSoloInfo CreateRankedSolo(JsonElement queue, string divisionProperty)
     {
         var info = new RankedSoloInfo

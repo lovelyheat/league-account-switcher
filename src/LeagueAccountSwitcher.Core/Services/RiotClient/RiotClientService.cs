@@ -11,7 +11,6 @@ namespace LeagueAccountSwitcher.Core.Services.RiotClient;
 
 public sealed class RiotClientService : IRiotClientService
 {
-    // The complete set of processes this app may close. Vanguard (vgc, vgtray) must never be added.
     private static readonly string[] ProcessesToStop =
     [
         "LeagueClientUxRender",
@@ -189,7 +188,6 @@ public sealed class RiotClientService : IRiotClientService
                     isRestartingTarget,
                     isChangedPostClose: false))
             {
-                // The live file holds newer rotated tokens than the snapshot; ensure its backup is fresh too.
                 await BackUpAsync(targetAccount.Id, liveSession, progress, ct).ConfigureAwait(false);
                 progress?.Report($"{targetAccount.DisplayName} is already signed in. Keeping the current session.");
             }
@@ -269,7 +267,6 @@ public sealed class RiotClientService : IRiotClientService
             }
 
             progress?.Report("Launching Riot Client...");
-            // Launch with League product context so Riot Client persists psl.authorization.riot-client immediately upon sign-in.
             Launch(clientPath, LaunchTarget.LeagueOfLegends);
             progress?.Report("Sign in to the new account with \"Stay signed in\" checked.");
         }
@@ -309,7 +306,6 @@ public sealed class RiotClientService : IRiotClientService
         await StopClientsAsync(allowCloseRunningMatch, ct).ConfigureAwait(false);
 
         progress?.Report("Waiting for Riot Client to release its files...");
-        // An exclusive open succeeds only once every other handle on the file is gone.
         var afterClose = await ReadPrivateSettingsAsync(FileShare.None, ct).ConfigureAwait(false);
 
         if (afterClose is not null)
@@ -317,7 +313,6 @@ public sealed class RiotClientService : IRiotClientService
             var changed = beforeClose is null || !afterClose.AsSpan().SequenceEqual(beforeClose);
             if (changed || !beforeBackedUp)
             {
-                // Riot can write rotated tokens or finish signing in while shutting down.
                 var (_, postCloseTarget) = await PreserveOrCheckSessionAsync(
                     afterClose,
                     outgoingId,
@@ -356,7 +351,6 @@ public sealed class RiotClientService : IRiotClientService
         if (!live.HasSession)
             return (false, null);
 
-        // 1. If the live session belongs to the target account being launched/restarted, preserve it on the target.
         if (!string.IsNullOrWhiteSpace(targetAccountId)
             && IsLiveSessionForTarget(live, targetExpectedPuuid, isRestartingTarget, isChangedPostClose))
         {
@@ -364,7 +358,6 @@ public sealed class RiotClientService : IRiotClientService
                 return (true, sessionBytes);
         }
 
-        // 2. Always resolve by PUUID first so another saved account's session is never written over an outgoing account with no known PUUID.
         if (live.Puuid is not null &&
             await FindOwnerAccountIdByPuuidAsync(live.Puuid, ct).ConfigureAwait(false) is { } ownerId)
         {
@@ -379,7 +372,6 @@ public sealed class RiotClientService : IRiotClientService
             }
         }
 
-        // 3. Fall back to the explicitly specified outgoing account only if identity is provable (or pre-close with no conflicting owner).
         if (!string.IsNullOrWhiteSpace(outgoingId))
         {
             var outgoingExpectedPuuid = await GetExpectedPuuidAsync(outgoingId, ct).ConfigureAwait(false);
@@ -415,7 +407,6 @@ public sealed class RiotClientService : IRiotClientService
         if (targetExpectedPuuid is not null)
             return live.Puuid is not null && targetExpectedPuuid.Equals(live.Puuid, StringComparison.OrdinalIgnoreCase);
 
-        // When target has no known PUUID, only treat an unidentified pre-close session as the target if we are explicitly restarting it.
         return isRestartingTarget && !isChangedPostClose && live.Puuid is null;
     }
 
@@ -428,7 +419,6 @@ public sealed class RiotClientService : IRiotClientService
         if (!live.HasSession)
             return false;
 
-        // Fail closed: never overwrite an account with a known PUUID using a different or unknown identity.
         if (await GetExpectedPuuidAsync(accountId, ct).ConfigureAwait(false) is { } expected &&
             (live.Puuid is null || !expected.Equals(live.Puuid, StringComparison.OrdinalIgnoreCase)))
         {
@@ -468,7 +458,6 @@ public sealed class RiotClientService : IRiotClientService
             var accounts = await _accountStore.LoadAccountsAsync(ct).ConfigureAwait(false);
             var recorded = accounts.FirstOrDefault(a => a.Id == accountId)?.Puuid;
 
-            // Riot API PUUIDs are encrypted per key and cannot be compared with the `sub` cookie, which is a GUID.
             return Guid.TryParse(recorded, out _) ? recorded : null;
         }
         catch (CorruptAccountStoreException)
@@ -506,7 +495,6 @@ public sealed class RiotClientService : IRiotClientService
         while (closeRequested && elapsed.Elapsed < _environment.CloseGracePeriod && AnyRunning())
             await Task.Delay(100, ct).ConfigureAwait(false);
 
-        // Re-check before force killing in case a match launched during the close grace period.
         EnsureMatchCanClose(allowCloseRunningMatch);
 
         var delay = 100;
@@ -622,7 +610,6 @@ public sealed class RiotClientService : IRiotClientService
         "No signed-in Riot session was found. Sign in to Riot Client with \"Stay signed in\" checked, then try again.");
 }
 
-// Internal seam: tests must not close the developer's real Riot Client or touch their real session.
 internal sealed record RiotEnvironment
 {
     public string LocalAppData { get; init; } = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -649,7 +636,6 @@ internal sealed class WindowsRiotProcesses : IRiotProcesses
 
     public void Kill(string name) => ForEachInCurrentSession(name, process =>
     {
-        // Never the process tree: Riot Client can be the parent of other games and helpers.
         process.Kill(entireProcessTree: false);
         return true;
     });
@@ -677,13 +663,11 @@ internal sealed class WindowsRiotProcesses : IRiotProcesses
             {
                 try
                 {
-                    // Other signed-in Windows users may be running their own clients.
                     if (process.SessionId == current.SessionId)
                         any |= action(process);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
                 {
-                    // Already exited or access denied. The caller polls and reports whatever is still running.
                 }
             }
         }

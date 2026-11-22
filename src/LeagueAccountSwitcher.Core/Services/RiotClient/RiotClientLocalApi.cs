@@ -7,9 +7,6 @@ using LeagueAccountSwitcher.Core.Services.Lcu;
 
 namespace LeagueAccountSwitcher.Core.Services.RiotClient;
 
-/// <summary>
-/// Reads the currently signed-in account metadata from Riot Client's local loopback API via its lockfile.
-/// </summary>
 internal static class RiotClientLocalApi
 {
     private static readonly HttpClient Http = new(new HttpClientHandler

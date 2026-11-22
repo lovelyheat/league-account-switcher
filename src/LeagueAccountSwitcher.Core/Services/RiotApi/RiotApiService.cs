@@ -7,15 +7,9 @@ namespace LeagueAccountSwitcher.Core.Services.RiotApi;
 
 public sealed class RiotApiService(HttpClient? httpClient = null) : IRiotApiService
 {
-    // HttpClient re-sends custom headers such as X-Riot-Token when it follows a redirect, so it must not follow any.
     private readonly HttpClient _http = httpClient
         ?? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(15) };
 
-    /// <summary>
-    /// Returns null when the account cannot be looked up (unsupported region, no identity, or not found).
-    /// </summary>
-    /// <exception cref="ArgumentException">The API key is blank or malformed.</exception>
-    /// <exception cref="HttpRequestException">The request failed; <c>StatusCode</c> is set for HTTP errors.</exception>
     public async Task<AccountRefreshResult?> RefreshAccountAsync(AccountRecord account, string apiKey, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(account);
@@ -43,7 +37,6 @@ public sealed class RiotApiService(HttpClient? httpClient = null) : IRiotApiServ
         if (entries is null && LcuResponseParser.GetString(summoner, "id") is { } summonerId)
             entries = await GetJsonAsync($"{platformUrl}/league/v4/entries/by-summoner/{Uri.EscapeDataString(summonerId)}", key, ct);
 
-        // No entries payload means the rank is unknown, which must not overwrite a saved rank with Unranked.
         if (entries is not { ValueKind: JsonValueKind.Array } queues)
             return null;
 
@@ -58,7 +51,6 @@ public sealed class RiotApiService(HttpClient? httpClient = null) : IRiotApiServ
         }
 
         return new AccountRefreshResult(
-            // API puuids are encrypted per key; replacing the client's UUID with one would break LCU account matching.
             IsClientPuuid(account.Puuid) ? account.Puuid! : apiPuuid,
             LcuResponseParser.GetString(riotAccount, "gameName") ?? account.GameName,
             LcuResponseParser.GetString(riotAccount, "tagLine") ?? account.TagLine,
@@ -70,12 +62,10 @@ public sealed class RiotApiService(HttpClient? httpClient = null) : IRiotApiServ
 
     private async Task<JsonElement?> GetAccountAsync(AccountRecord account, RegionMetadata region, string key, CancellationToken ct)
     {
-        // Account-V1 has no SEA cluster; any of its three clusters can serve any account.
         var route = region.RegionalRoute == "sea" ? "asia" : region.RegionalRoute;
         var baseUrl = $"https://{route}.api.riotgames.com/riot/account/v1/accounts";
         var hasRiotId = !string.IsNullOrWhiteSpace(account.GameName) && !string.IsNullOrWhiteSpace(account.TagLine);
 
-        // The API rejects the UUIDs that the League Client reports.
         if (!string.IsNullOrWhiteSpace(account.Puuid) && !IsClientPuuid(account.Puuid))
         {
             try
@@ -84,7 +74,6 @@ public sealed class RiotApiService(HttpClient? httpClient = null) : IRiotApiServ
             }
             catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.BadRequest && hasRiotId)
             {
-                // 400 means the puuid was encrypted for another API key, so resolve it again from the Riot ID.
             }
         }
 
@@ -95,11 +84,9 @@ public sealed class RiotApiService(HttpClient? httpClient = null) : IRiotApiServ
 
     private static bool IsClientPuuid(string? puuid) => Guid.TryParse(puuid, out _);
 
-    // Riot merged the PH and TH platforms into SG2, and their old hostnames no longer resolve.
     private static string GetPlatformHost(RegionMetadata region) =>
         region.PlatformId is "ph2" or "th2" ? "sg2" : region.PlatformId;
 
-    /// <summary>Returns null on 404.</summary>
     private async Task<JsonElement?> GetJsonAsync(string url, string key, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);

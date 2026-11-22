@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using LeagueAccountSwitcher.Core.Models;
 
@@ -6,7 +5,6 @@ namespace LeagueAccountSwitcher.Core.Services.RiotClient;
 
 public sealed record RiotSessionInfo(bool HasSession, string? Puuid, string? Region);
 
-// shortcut: reads block-style YAML with single-line scalars only, switch to YamlDotNet if Riot emits flow style.
 public static class RiotYamlSessionParser
 {
     private const string LegacyCookiesPath = "riot-login/persist/session/cookies";
@@ -31,8 +29,6 @@ public static class RiotYamlSessionParser
         var legacyPuuid = legacyCookies.FirstOrDefault(c => c.Name == "sub").Value;
         var hasLegacySession = legacyCookies.Any(c => c.Name == "ssid");
 
-        // Modern Riot Client (2025+) stores persistent login tokens under `psl.authorization.riot-client`.
-        // When signed out or not persisted, Riot writes `riot-client: null` (which ReadScalar turns into empty string).
         var pslEntries = entries
             .Where(e => !string.IsNullOrWhiteSpace(e.Value) && IsPslAuthorizationEntry(e))
             .ToList();
@@ -98,7 +94,6 @@ public static class RiotYamlSessionParser
         }
         catch
         {
-            // Opaque or encrypted token; not a plaintext JWT.
         }
 
         return null;
@@ -108,7 +103,6 @@ public static class RiotYamlSessionParser
         entries.Where(e => e.Key == "region")
             .Concat(entries.Where(e => e.Key == "affinity"))
             .Select(e => LeagueRegion.Normalize(e.Value))
-            // Other Riot products use shard names such as "eu", which are not League regions.
             .FirstOrDefault(region => region == "PBE" || LeagueRegion.TryGetMetadata(region) is not null);
 
     internal static List<Entry> ReadEntries(string? yaml)
@@ -130,7 +124,6 @@ public static class RiotYamlSessionParser
             var indent = line.Length - content.Length;
             if (content == "-" || content.StartsWith("- ", StringComparison.Ordinal))
             {
-                // A list may share its parent key's indentation, so only deeper keys are closed here.
                 parents.RemoveAll(p => p.Indent > indent);
                 item++;
 

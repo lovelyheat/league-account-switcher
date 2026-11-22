@@ -6,7 +6,6 @@ namespace LeagueAccountSwitcher.Core.Services.Lcu;
 
 public sealed partial record LcuConnectionInfo(string ProcessName, int ProcessId, int Port, string AuthToken, string Protocol)
 {
-    /// <summary>Parses <c>LeagueClient:pid:port:token:protocol</c>.</summary>
     public static bool TryParseLockfile(string lockfileContent, [NotNullWhen(true)] out LcuConnectionInfo? info)
     {
         info = null;
@@ -26,7 +25,6 @@ public sealed partial record LcuConnectionInfo(string ProcessName, int ProcessId
         return true;
     }
 
-    /// <summary>Parses the arguments that <c>LeagueClientUx.exe</c> is started with.</summary>
     public static bool TryParseCommandLine(string commandLine, int processId, [NotNullWhen(true)] out LcuConnectionInfo? info)
     {
         info = null;
@@ -42,13 +40,11 @@ public sealed partial record LcuConnectionInfo(string ProcessName, int ProcessId
         return true;
     }
 
-    // The generated record ToString would put the auth token into logs.
     public override string ToString() => $"{ProcessName} ({ProcessId}) {Protocol}://127.0.0.1:{Port}";
 
     private static bool TryParsePort(string text, out int port) =>
         int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out port) && port is > 0 and <= 65535;
 
-    // The lookbehind keeps --riotclient-app-port and similar Riot Client arguments from matching.
     [GeneratedRegex("""(?<![\w-])--app-port=["']?(\d+)(?=["'\s]|$)""")]
     private static partial Regex AppPortArgument();
 
