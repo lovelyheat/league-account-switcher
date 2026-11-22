@@ -23,14 +23,28 @@ public partial class App : Application
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
         // Enforce single instance across ALL executable paths (e.g., Debug vs Release or copied folders) per Windows user session.
-        var mutex = new Mutex(initiallyOwned: true, name: SingleInstanceMutexName, out var createdNew);
+        Mutex mutex;
+        bool createdNew;
+        try
+        {
+            mutex = new Mutex(initiallyOwned: true, name: SingleInstanceMutexName, out createdNew);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Another instance (e.g., elevated) already owns the mutex.
+            Exit();
+            return;
+        }
+
         if (!createdNew)
         {
             mutex.Dispose();
             try
             {
-                var existing = AppInstance.FindOrRegisterForKey(InstanceKey);
-                if (!existing.IsCurrent)
+                // Look up without registering so a loser can never steal the key from a simultaneously starting winner.
+                var existing = AppInstance.GetInstances()
+                    .FirstOrDefault(i => i.Key == InstanceKey && !i.IsCurrent);
+                if (existing is not null)
                     await existing.RedirectActivationToAsync(AppInstance.GetCurrent().GetActivatedEventArgs());
             }
             catch

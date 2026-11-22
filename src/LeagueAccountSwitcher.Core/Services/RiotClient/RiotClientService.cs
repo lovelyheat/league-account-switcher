@@ -474,7 +474,10 @@ public sealed class RiotClientService : IRiotClientService
             }
 
             foreach (var name in ProcessesToStop)
-                processes.Kill(name);
+            {
+                if (allowCloseRunningMatch || name != "League of Legends")
+                    processes.Kill(name);
+            }
 
             await Task.Delay(delay, ct).ConfigureAwait(false);
             delay = Math.Min(delay * 2, 1000);

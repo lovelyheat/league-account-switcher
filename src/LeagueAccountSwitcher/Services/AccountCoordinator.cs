@@ -273,6 +273,7 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
             return (null, false);
 
         var account = FindByPuuid(live.Puuid);
+        var verificationUnavailable = false;
 
         // An account captured before its PUUID was known can only be claimed while it is active AND the live session file confirms it isn't a stale outgoing LCU.
         if (account is null && Active is { } active && string.IsNullOrEmpty(active.Puuid)
@@ -281,14 +282,24 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
         {
             string? liveSessionPuuid = null;
             try { liveSessionPuuid = await riot.TryReadActiveSessionPuuidAsync(); }
-            catch (IOException) { }
+            catch (IOException) { verificationUnavailable = true; }
 
-            var sessionConfirms = !string.IsNullOrEmpty(liveSessionPuuid)
-                ? string.Equals(liveSessionPuuid, live.Puuid, StringComparison.OrdinalIgnoreCase)
-                : active.GameName.Length > 0;
-
-            if (sessionConfirms)
-                account = active;
+            if (!verificationUnavailable)
+            {
+                if (!string.IsNullOrEmpty(liveSessionPuuid))
+                {
+                    if (string.Equals(liveSessionPuuid, live.Puuid, StringComparison.OrdinalIgnoreCase))
+                        account = active;
+                }
+                else if (active.GameName.Length > 0)
+                {
+                    account = active;
+                }
+                else
+                {
+                    verificationUnavailable = true;
+                }
+            }
         }
 
         var updated = false;
@@ -312,7 +323,7 @@ public sealed class AccountCoordinator(IAccountStore store, IRiotClientService r
             NotifyChanged();
         }
 
-        if (!IsOperating)
+        if (!IsOperating && !verificationUnavailable)
             await SetActiveAsync(account);
 
         return (account, updated);
